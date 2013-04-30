@@ -1,0 +1,1 @@
+Dipy denoising module
