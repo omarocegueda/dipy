@@ -411,22 +411,8 @@ class EMMetric(SimilarityMetric):
         diff-demons does for mono-modality images. If the flag
         self.use_double_gradient is True these gradients are averaged.
         """
-        sampling_mask = self.static_image_mask*self.moving_image_mask
-        self.sampling_mask = sampling_mask
-        staticq, self.staticq_levels, hist = self.quantize(self.static_image,
-                                                      self.q_levels)
-        staticq = np.array(staticq, dtype = np.int32)
-        self.staticq_levels = np.array(self.staticq_levels)
-        staticq_means, staticq_variances = self.compute_stats(sampling_mask,
-                                                       self.moving_image,
-                                                       self.q_levels,
-                                                       staticq)
-        staticq_means[0] = 0
-        staticq_means = np.array(staticq_means)
-        staticq_variances = np.array(staticq_variances)
-        self.staticq_sigma_field = staticq_variances[staticq]
-        self.staticq_means_field = staticq_means[staticq]
 
+        #Compute the moving image's gradient field
         self.gradient_moving = np.empty(
             shape = (self.moving_image.shape)+(self.dim,), dtype = floating)
         i = 0
@@ -439,6 +425,7 @@ class EMMetric(SimilarityMetric):
         if self.moving_direction is not None:
             self.reorient_vector_field(self.gradient_moving, self.moving_direction)
 
+        #Compute the static image's gradient field
         self.gradient_static = np.empty(
             shape = (self.static_image.shape)+(self.dim,), dtype = floating)
         i = 0
@@ -451,17 +438,6 @@ class EMMetric(SimilarityMetric):
         if self.static_direction is not None:
             self.reorient_vector_field(self.gradient_static, self.static_direction)
 
-        movingq, self.movingq_levels, hist = self.quantize(self.moving_image,
-                                                           self.q_levels)
-        movingq = np.array(movingq, dtype = np.int32)
-        self.movingq_levels = np.array(self.movingq_levels)
-        movingq_means, movingq_variances = self.compute_stats(
-            sampling_mask, self.static_image, self.q_levels, movingq)
-        movingq_means[0] = 0
-        movingq_means = np.array(movingq_means)
-        movingq_variances = np.array(movingq_variances)
-        self.movingq_sigma_field = movingq_variances[movingq]
-        self.movingq_means_field = movingq_means[movingq]
         if self.use_double_gradient:
             i = 0
             for grad in sp.gradient(self.staticq_means_field):
@@ -476,8 +452,9 @@ class EMMetric(SimilarityMetric):
         r"""
         Frees the resources allocated during initialization
         """
-        del self.sampling_mask
+        del self.staticq
         del self.staticq_levels
+        del self.movingq
         del self.movingq_levels
         del self.staticq_sigma_field
         del self.staticq_means_field
@@ -610,12 +587,15 @@ class EMMetric(SimilarityMetric):
         """
         return self.energy
 
-    def use_static_image_dynamics(self, original_static_image, transformation):
+    def use_image_dynamics(self, original_static_image, static_transform,
+                           original_moving_image, moving_transform):
         r"""
-        EMMetric takes advantage of the image dynamics by computing the
-        current static image mask from the originalstaticImage mask (warped
-        by nearest neighbor interpolation)
-        
+        EMMetric takes advantage of the image dynamics by pre-computing the
+        quantization of both images and using the original images to compute
+        the statistics of the hidden variables from them. The resulting
+        "means_fields" and "sigma_fields" are used later to compute the 
+        forward and backward registration steps.
+
         Parameters
         ----------
         original_static_image : array, shape (R, C) or (S, R, C)
@@ -624,36 +604,92 @@ class EMMetric(SimilarityMetric):
             via 'set_static_image(...)', which may not be the same as the
             original static image but a warped version of it (even the static 
             image changes during Symmetric Normalization, not only the moving one).
-        transformation : DiffeomorphicMap object
+        static_transform : DiffeomorphicMap object
             the transformation that was applied to the original_static_image 
             to generate the current static image
-        """
-        self.static_image_mask = (original_static_image>0).astype(np.int32)
-        if transformation == None:
-            return
-        self.static_image_mask = transformation.transform(self.static_image_mask,'nn')
-
-    def use_moving_image_dynamics(self, original_moving_image, transformation):
-        r"""
-        EMMetric takes advantage of the image dynamics by computing the
-        current moving image mask from the original_moving_image mask (warped
-        by nearest neighbor interpolation)
-
-        Parameters
-        ----------
         original_moving_image : array, shape (R, C) or (S, R, C)
             the original moving image from which the current moving image was
             generated, the current moving image is the one that was provided 
             via 'set_moving_image(...)', which may not be the same as the
             original moving image but a warped version of it.
-        transformation : DiffeomorphicMap object
+        moving_transform : DiffeomorphicMap object
             the transformation that was applied to the original_moving_image 
             to generate the current moving image
+
         """
-        self.moving_image_mask = (original_moving_image>0).astype(np.int32)
-        if transformation == None:
-            return
-        self.moving_image_mask = transformation.transform(self.moving_image_mask,'nn')
+        #The original static and moving images are given in full resolution
+        #and they never change during the optimization at each pyramid level.
+        #On the other hand, the transformations that warp those images to
+        #the reference grid change at each iteration and the hidden variables
+        #are precisely the intensities at the >>voxels of the warped images<<.
+        #Therefore, it is the quantization what changes over time, but
+        #the samples that we need to compute the statistics from must be the
+        #intensities of the original images. We do that by using the inverse
+        #transforms:
+
+        #Quantize the warped static image (it was given via "set_static_image(.)")
+        quantized, levels, hist = self.quantize(self.static_image, self.q_levels)
+        
+        ##Convert to numpy arrays and assign as properties
+        self.staticq = np.asarray(quantized) 
+        self.staticq_levels = np.asarray(levels)
+        self.staticq_hist = np.asarray(hist)
+
+        #Quantize the warped moving image (it was given via "set_moving_image(.)")
+        quantized, levels, hist = self.quantize(self.moving_image, self.q_levels)
+        
+        ##Convert to numpy arrays and assign as properties
+        self.movingq = np.asarray(quantized) 
+        self.movingq_levels = np.asarray(levels)
+        self.movingq_hist = np.asarray(hist)
+
+        #Transfer the quantization of the coarse static image to the fine
+        #moving image using the inverse transform and N.N. interpolation
+        orig_movingq = moving_transform.transform_inverse(self.staticq, 'nn')
+
+        #Transfer the quantization of the coarse moving image to the fine
+        #static image using the inverse transform and N.N. interpolation
+        orig_staticq = static_transform.transform_inverse(self.movingq, 'nn')
+
+        #Compute the mean and variance for each label of orig_movingq using
+        #the values of the original moving image (this will provide the stats
+        #for the labels of the >>static image's<< quantization, because it was
+        #this quantization what was transfered to the original moving image.
+        #The sampling mask is precisely the original moving image's mask
+        self.original_moving_mask = (original_moving_image > 0).astype(np.int32)
+        means, vars = self.compute_stats(self.original_moving_mask, 
+                                         original_moving_image,
+                                         self.q_levels, 
+                                         orig_movingq)
+
+        #Prevent the background from affecting the quantization values
+        means[0], vars[0] = 0, 0
+        self.staticq_means, self.staticq_vars = np.asarray(means), np.asarray(vars)
+
+        #Compute the mean and variance for each label of orig_staticq using
+        #the values of the original static image (this will provide the stats
+        #for the labels of the >>moving image's<< quantization, because it was
+        #this quantization what was transfered to the original static image
+        #The sampling mask is precisely the original static image's mask
+        self.original_static_mask = (original_static_image > 0).astype(np.int32)
+        means, vars = self.compute_stats(self.original_static_mask, 
+                                         original_static_image,
+                                         self.q_levels, 
+                                         orig_staticq)
+
+        #Prevent the background from affecting the quantization values
+        means[0], vars[0] = 0, 0
+        self.movingq_means, self.movingq_vars = np.asarray(means), np.asarray(vars)
+
+        #Transfer the statistics to the quantized images to get the means_fields
+        #and sigma_fields
+        #Static fields
+        self.staticq_means_field = self.staticq_means[self.staticq]
+        self.staticq_sigma_field = self.staticq_vars[self.staticq]
+
+        #Moving fields
+        self.movingq_means_field = self.movingq_means[self.movingq]
+        self.movingq_sigma_field = self.movingq_vars[self.movingq]
 
 
 class SSDMetric(SimilarityMetric):

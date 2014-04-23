@@ -1209,7 +1209,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         if not ready:
             print('Not ready')
             return False
-        #Extract information from the affine matrices to create the scale space
+        #Extract information from the affine transforms to create the scale space
         static_direction, static_spacing = get_direction_and_spacings(static_affine, self.dim)
         moving_direction, moving_spacing = get_direction_and_spacings(moving_affine, self.dim)
 
@@ -1320,13 +1320,14 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         #change across scales
         self.metric.set_moving_image(wmoving, current_domain_affine, 
             current_domain_spacing, self.static_direction)
-        self.metric.use_moving_image_dynamics(
-            current_moving, self.backward_model.inverse())
 
         self.metric.set_static_image(wstatic, current_domain_affine, 
             current_domain_spacing, self.static_direction)
-        self.metric.use_static_image_dynamics(
-            current_static, self.forward_model.inverse())
+        
+        self.metric.use_image_dynamics(current_static,
+                                       self.forward_model.inverse(),
+                                       current_moving,
+                                       self.backward_model.inverse())
 
         #Initialize the metric for a new iteration
         self.metric.initialize_iteration()
