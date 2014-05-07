@@ -389,11 +389,11 @@ class EMMetric(SimilarityMetric):
         dimension of the input images
         """
         if self.dim == 2:
-            self.quantize = em.quantize_positive_image
+            self.quantize = em.quantize_masked_image
             self.compute_stats = em.compute_masked_image_class_stats
             self.reorient_vector_field = vfu.reorient_vector_field_2d
         else:
-            self.quantize = em.quantize_positive_volume
+            self.quantize = em.quantize_masked_volume
             self.compute_stats = em.compute_masked_volume_class_stats
             self.reorient_vector_field = vfu.reorient_vector_field_3d
 
@@ -414,8 +414,9 @@ class EMMetric(SimilarityMetric):
         """
         sampling_mask = self.static_image_mask*self.moving_image_mask
         self.sampling_mask = sampling_mask
-        staticq, self.staticq_levels, hist = self.quantize(self.static_image,
-                                                      self.q_levels)
+        staticq, self.staticq_levels, hist = self.quantize(sampling_mask, 
+                                                           self.static_image,
+                                                           self.q_levels)
         staticq = np.array(staticq, dtype=np.int32)
         self.staticq_levels = np.array(self.staticq_levels)
         staticq_means, staticq_variances = self.compute_stats(sampling_mask,
@@ -423,6 +424,7 @@ class EMMetric(SimilarityMetric):
                                                        self.q_levels,
                                                        staticq)
         staticq_means[0] = 0
+        staticq_variances[0] = 0
         self.staticq_means = np.array(staticq_means)
         self.staticq_variances = np.array(staticq_variances)
         self.staticq_sigma_sq_field = self.staticq_variances[staticq]
@@ -454,13 +456,15 @@ class EMMetric(SimilarityMetric):
             self.reorient_vector_field(self.gradient_static,
                                        self.static_direction)
 
-        movingq, self.movingq_levels, hist = self.quantize(self.moving_image,
+        movingq, self.movingq_levels, hist = self.quantize(sampling_mask,
+                                                           self.moving_image,
                                                            self.q_levels)
         movingq = np.array(movingq, dtype=np.int32)
         self.movingq_levels = np.array(self.movingq_levels)
         movingq_means, movingq_variances = self.compute_stats(
             sampling_mask, self.static_image, self.q_levels, movingq)
         movingq_means[0] = 0
+        movingq_variances[0] = 0
         self.movingq_means = np.array(movingq_means)
         self.movingq_variances = np.array(movingq_variances)
         self.movingq_sigma_sq_field = self.movingq_variances[movingq]

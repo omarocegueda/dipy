@@ -16,7 +16,7 @@ cdef inline int ifloor(double x) nogil:
     return int(floor(x))
 
 
-def quantize_positive_image(floating[:, :] v, int num_levels):
+def quantize_masked_image(int[:,:] mask, floating[:, :] v, int num_levels):
     r"""
     Quantizes the input image at the given number of intensity levels, 
     considering 0 as a special value: at the end, only those voxels with zero
@@ -49,7 +49,7 @@ def quantize_positive_image(floating[:, :] v, int num_levels):
 
         for i in range(nrows):
             for j in range(ncols):
-                if(v[i, j] > 0):
+                if(mask[i, j] != 0):
                     if((min_val < 0) or (v[i, j] < min_val)):
                         min_val = v[i, j]
                     if(v[i, j] > max_val):
@@ -61,7 +61,7 @@ def quantize_positive_image(floating[:, :] v, int num_levels):
         if((num_levels < 2) or (delta < epsilon)):
             for i in range(nrows):
                 for j in range(ncols):
-                    if(v[i, j] > 0):
+                    if(mask[i, j] != 0):
                         out[i, j] = 1
                     else:
                         out[i, j] = 0
@@ -78,7 +78,7 @@ def quantize_positive_image(floating[:, :] v, int num_levels):
             levels[i] = levels[i - 1] + delta
         for i in range(nrows):
             for j in range(ncols):
-                if(v[i, j] > 0):
+                if(mask[i, j] != 0):
                     l = ifloor((v[i, j] - min_val) / delta)
                     out[i, j] = l + 1
                     hist[l + 1] += 1
@@ -89,7 +89,7 @@ def quantize_positive_image(floating[:, :] v, int num_levels):
     return out, levels, hist
 
 
-def quantize_positive_volume(floating[:, :, :] v, int num_levels):
+def quantize_masked_volume(int[:,:,:] mask, floating[:, :, :] v, int num_levels):
     r"""
     Quantizes the input volume at the given number of intensity levels,
     considering 0 as a special value: at the end, only those voxels with zero
@@ -108,14 +108,17 @@ def quantize_positive_volume(floating[:, :, :] v, int num_levels):
         int nrows = v.shape[1]
         int ncols = v.shape[2]
         int nvox = nrows * ncols * nslices
-        int i, j, k, l
-        double epsilon, delta
+        int i, j, k, l, nn, sel
+        double epsilon, delta, opt, closest
         double min_val = -1
         double max_val = -1
         int[:] hist = np.zeros(shape=(num_levels,), dtype=np.int32)
         int[:, :, :] out = np.zeros(shape=(nslices, nrows, ncols),
                                     dtype=np.int32)
         floating[:] levels = np.zeros(shape=(num_levels,), dtype=ftype)
+        int *dslice = [0, 0, 0, 0, -1, 1] #6-neighborhood
+        int *drow = [-1, 0, 1, 0, 0, 0] #6-neighborhood
+        int *dcol = [0, 1, 0, -1, 0, 0] #6-neighborhood
     num_levels -= 1  # zero is one of the levels
     if(num_levels < 1):
         return None, None, None
@@ -125,7 +128,7 @@ def quantize_positive_volume(floating[:, :, :] v, int num_levels):
         for k in range(nslices):
             for i in range(nrows):
                 for j in range(ncols):
-                    if(v[k, i, j] > 0):
+                    if(mask[k, i, j] != 0):
                         if((min_val < 0) or (v[k, i, j] < min_val)):
                             min_val = v[k, i, j]
                         if(v[k, i, j] > max_val):
@@ -138,7 +141,7 @@ def quantize_positive_volume(floating[:, :, :] v, int num_levels):
             for k in range(nslices):
                 for i in range(nrows):
                     for j in range(ncols):
-                        if(v[k, i, j] > 0):
+                        if(mask[k, i, j] != 0):
                             out[k, i, j] = 1
                         else:
                             out[k, i, j] = 0
@@ -155,13 +158,39 @@ def quantize_positive_volume(floating[:, :, :] v, int num_levels):
         for k in range(nslices):
             for i in range(nrows):
                 for j in range(ncols):
-                    if(v[k, i, j] > 0):
+                    if(mask[k, i, j] != 0):
                         l = ifloor((v[k, i, j] - min_val) / delta)
                         out[k, i, j] = l + 1
                         hist[l + 1] += 1
                     else:
                         out[k, i, j] = 0
                         hist[0] += 1
+        #Eliminate voxels with unique labels
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    l = out[k, i, j]
+                    if(hist[l]==1):
+                        #take the label of the most similar neighbor
+                        closest = -1
+                        sel = -1
+                        for nn in range(6):
+                            kk = k + dslice[nn]
+                            ii = i + drow[nn]
+                            jj = j + dcol[nn]
+                            if (0 <= kk < nslices) and (0 <= ii < nrows) and (0 <= jj <ncols):
+                                if (mask[kk, ii, jj] == 0) or (hist[out[kk,ii,jj]] < 2):
+                                    continue
+                                opt = v[k, i, j] - v[kk, ii, jj]
+                                if opt < 0:
+                                    opt = -opt
+                                if (sel < 0) or (opt < closest):
+                                    closest = opt
+                                    sel = out[kk, ii, jj]
+                        out[k,i,j] = sel
+                        hist[l] -= 1
+                        hist[sel] += 1
+
     return out, levels, hist
 
 
@@ -274,7 +303,7 @@ def compute_masked_volume_class_stats(int[:, :, :] mask, floating[:, :, :] v,
         for i in range(numLabels):
             if(counts[i] > 1):
                 variances[i] /= counts[i]
-            else:
+            elif counts[i] == 1:
                 variances[i] = INF64
     return means, variances
 
