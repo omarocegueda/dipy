@@ -179,7 +179,7 @@ def quantize_masked_volume(int[:,:,:] mask, floating[:, :, :] v, int num_levels)
                             ii = i + drow[nn]
                             jj = j + dcol[nn]
                             if (0 <= kk < nslices) and (0 <= ii < nrows) and (0 <= jj <ncols):
-                                if (mask[kk, ii, jj] == 0) or (hist[out[kk,ii,jj]] < 2):
+                                if (mask[kk, ii, jj] == 0):
                                     continue
                                 opt = v[k, i, j] - v[kk, ii, jj]
                                 if opt < 0:
@@ -187,6 +187,8 @@ def quantize_masked_volume(int[:,:,:] mask, floating[:, :, :] v, int num_levels)
                                 if (sel < 0) or (opt < closest):
                                     closest = opt
                                     sel = out[kk, ii, jj]
+                        if sel == -1:#its an isolated voxel surrounded by background
+                            sel = 0
                         out[k,i,j] = sel
                         hist[l] -= 1
                         hist[sel] += 1
