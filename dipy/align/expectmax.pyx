@@ -247,7 +247,7 @@ def compute_masked_image_class_stats(int[:, :] mask, floating[:, :] v,
         for i in range(numLabels):
             if(counts[i] > 1):
                 variances[i] /= counts[i]
-            else:
+            elif counts[i] == 1:
                 variances[i] = INF64
     return means, variances
 

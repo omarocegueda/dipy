@@ -414,7 +414,7 @@ class EMMetric(SimilarityMetric):
         """
         sampling_mask = self.static_image_mask*self.moving_image_mask
         self.sampling_mask = sampling_mask
-        staticq, self.staticq_levels, hist = self.quantize(sampling_mask, 
+        staticq, self.staticq_levels, hist = self.quantize(self.static_image_mask, 
                                                            self.static_image,
                                                            self.q_levels)
         staticq = np.array(staticq, dtype=np.int32)
@@ -424,9 +424,9 @@ class EMMetric(SimilarityMetric):
                                                        self.q_levels,
                                                        staticq)
         staticq_means[0] = 0
-        staticq_variances[0] = 0
         self.staticq_means = np.array(staticq_means)
         self.staticq_variances = np.array(staticq_variances)
+        self.staticq_variances[0] = self.staticq_variances.max()
         self.staticq_sigma_sq_field = self.staticq_variances[staticq]
         self.staticq_means_field = self.staticq_means[staticq]
 
@@ -456,7 +456,7 @@ class EMMetric(SimilarityMetric):
             self.reorient_vector_field(self.gradient_static,
                                        self.static_direction)
 
-        movingq, self.movingq_levels, hist = self.quantize(sampling_mask,
+        movingq, self.movingq_levels, hist = self.quantize(self.moving_image_mask,
                                                            self.moving_image,
                                                            self.q_levels)
         movingq = np.array(movingq, dtype=np.int32)
@@ -464,9 +464,9 @@ class EMMetric(SimilarityMetric):
         movingq_means, movingq_variances = self.compute_stats(
             sampling_mask, self.static_image, self.q_levels, movingq)
         movingq_means[0] = 0
-        movingq_variances[0] = 0
         self.movingq_means = np.array(movingq_means)
         self.movingq_variances = np.array(movingq_variances)
+        self.movingq_variances[0] = self.movingq_variances.max()
         self.movingq_sigma_sq_field = self.movingq_variances[movingq]
         self.movingq_means_field = self.movingq_means[movingq]
         if self.use_double_gradient:
