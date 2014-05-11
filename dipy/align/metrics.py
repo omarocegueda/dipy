@@ -420,6 +420,8 @@ class EMMetric(SimilarityMetric):
         staticq_means[0] = 0
         self.staticq_means = np.array(staticq_means)
         self.staticq_variances = np.array(staticq_vars)
+        self.staticq_variances[np.isinf(self.staticq_variances)] =\
+            self.staticq_variances.max()
         self.staticq_sigma_sq_field = self.staticq_variances[staticq]
         self.staticq_means_field = self.staticq_means[staticq]
 
@@ -458,6 +460,7 @@ class EMMetric(SimilarityMetric):
         movingq_means[0] = 0
         self.movingq_means = np.array(movingq_means)
         self.movingq_variances = np.array(movingq_variances)
+        self.movingq_variances[np.isinf(self.movingq_variances)] = self.movingq_variances.max()
         self.movingq_sigma_sq_field = self.movingq_variances[movingq]
         self.movingq_means_field = self.movingq_means[movingq]
         if self.use_double_gradient:
