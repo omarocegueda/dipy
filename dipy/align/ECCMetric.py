@@ -102,16 +102,26 @@ class ECCMetric(SimilarityMetric):
         self.movingq_variances[np.isinf(self.movingq_variances)] = self.movingq_variances.max()
         self.movingq_sigma_sq_field = self.movingq_variances[movingq]
         self.movingq_means_field = self.movingq_means[movingq]
-        
+
+        #Compare the goodness of fit
+        staticq_mse = np.sum((self.staticq_means_field - self.moving_image)**2, -1).mean()
+        movingq_mse = np.sum((self.movingq_means_field - self.static_image)**2, -1).mean()
+
         ##################################################
         #Compute the CC factors (CC-initialization)
         ##################################################
-        self.staticq_factors = self.precompute_factors(self.staticq_means_field,
+        if staticq_mse < movingq_mse:
+            self.staticq_factors = self.precompute_factors(self.staticq_means_field,
                                              self.moving_image,
                                              self.radius)
-        self.movingq_factors = self.precompute_factors(self.static_image,
+            self.movingq_factors = self.staticq_factors
+            print('Staticq selected')
+        else:
+            self.movingq_factors = self.precompute_factors(self.static_image,
                                              self.movingq_means_field,
                                              self.radius)
+            self.staticq_factors = self.movingq_factors
+            print('Movingq selected')
         self.staticq_factors = np.array(self.staticq_factors)
         self.movingq_factors = np.array(self.movingq_factors)
         
