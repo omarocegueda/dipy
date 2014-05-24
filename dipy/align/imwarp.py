@@ -1305,15 +1305,29 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         #Pass both images to the metric. Now both images are sampled on the
         #reference grid (equal to the static image's grid) and the direction
         #doesn't change across scales
-        self.metric.set_moving_image(wmoving, current_domain_affine, 
-            current_domain_spacing, self.static_direction)
-        self.metric.use_moving_image_dynamics(
-            current_moving, self.backward_model.inverse())
+        #----This block implements the separate image dynamics----
+        #self.metric.set_moving_image(wmoving, current_domain_affine, 
+        #    current_domain_spacing, self.static_direction)
+        #self.metric.use_moving_image_dynamics(
+        #    current_moving, self.backward_model.inverse())
 
+        #self.metric.set_static_image(wstatic, current_domain_affine, 
+        #    current_domain_spacing, self.static_direction)
+        #self.metric.use_static_image_dynamics(
+        #    current_static, self.forward_model.inverse())
+        #----------------------------------------------------------
         self.metric.set_static_image(wstatic, current_domain_affine, 
             current_domain_spacing, self.static_direction)
-        self.metric.use_static_image_dynamics(
-            current_static, self.forward_model.inverse())
+        self.metric.set_moving_image(wmoving, current_domain_affine, 
+            current_domain_spacing, self.static_direction)
+
+        static_affine = self.static_ss.get_affine(0)
+        moving_affine = self.moving_ss.get_affine(0)
+
+        self.metric.use_image_dynamics(current_static, static_affine,
+                                       self.forward_model.inverse(),
+                                       current_moving, moving_affine,
+                                       self.backward_model.inverse())
 
         #Initialize the metric for a new iteration
         self.metric.initialize_iteration()

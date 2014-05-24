@@ -67,87 +67,29 @@ class ECCMetric(SimilarityMetric):
         Pre-computes the cross-correlation factors
         """
         ##################################################
-        #Estimate the hidden variables (EM-initialization)
-        ##################################################
-        #Use only the foreground intersection for estimation
-        sampling_mask = self.static_image_mask*self.moving_image_mask
-        self.sampling_mask = sampling_mask
-        
-        #Process the Static image quantization
-        staticq, self.staticq_levels, hist = self.quantize(self.static_image,
-                                                           self.q_levels)
-        staticq = np.array(staticq, dtype=np.int32)
-        self.staticq_levels = np.array(self.staticq_levels)
-        staticq_means, staticq_variances = self.compute_stats(sampling_mask,
-                                                              self.moving_image,
-                                                              self.q_levels,
-                                                              staticq)
-        staticq_means[0] = 0
-        self.staticq_means = np.array(staticq_means)
-        self.staticq_variances = np.array(staticq_variances)
-        self.staticq_variances[np.isinf(self.staticq_variances)] = self.staticq_variances.max()
-        self.staticq_sigma_sq_field = self.staticq_variances[staticq]
-        self.staticq_means_field = self.staticq_means[staticq]
-
-        #Process the Moving image quantization
-        movingq, self.movingq_levels, hist = self.quantize(self.moving_image,
-                                                           self.q_levels)
-        movingq = np.array(movingq, dtype=np.int32)
-        self.movingq_levels = np.array(self.movingq_levels)
-        movingq_means, movingq_variances = self.compute_stats(
-            sampling_mask, self.static_image, self.q_levels, movingq)
-        movingq_means[0] = 0
-        self.movingq_means = np.array(movingq_means)
-        self.movingq_variances = np.array(movingq_variances)
-        self.movingq_variances[np.isinf(self.movingq_variances)] = self.movingq_variances.max()
-        self.movingq_sigma_sq_field = self.movingq_variances[movingq]
-        self.movingq_means_field = self.movingq_means[movingq]
-
-        #Compare the goodness of fit
-        staticq_mse = np.sum((self.staticq_means_field - self.moving_image)**2, -1).mean()
-        movingq_mse = np.sum((self.movingq_means_field - self.static_image)**2, -1).mean()
-
-        ##################################################
         #Compute the CC factors (CC-initialization)
         ##################################################
-        if staticq_mse < movingq_mse:
-            self.staticq_factors = self.precompute_factors(self.staticq_means_field,
-                                             self.moving_image,
-                                             self.radius)
-            self.movingq_factors = self.staticq_factors
-            print('Staticq selected')
-        else:
-            self.movingq_factors = self.precompute_factors(self.static_image,
-                                             self.movingq_means_field,
-                                             self.radius)
-            self.staticq_factors = self.movingq_factors
-            print('Movingq selected')
+        self.staticq_factors = self.precompute_factors(self.staticq_means_field,
+                                                       self.moving_image,
+                                                       self.radius)
+        self.movingq_factors = self.precompute_factors(self.static_image,
+                                                       self.movingq_means_field,
+                                                       self.radius)
         self.staticq_factors = np.array(self.staticq_factors)
         self.movingq_factors = np.array(self.movingq_factors)
         
         ##################################################
         #Compute the gradients (common initialization)
         ##################################################
-        if staticq_mse < movingq_mse: #choose staticq_means_field as static
-            self.gradient_moving = np.empty(
-                shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.moving_image)):
-                self.gradient_moving[..., i] = grad
+        self.gradient_moving = np.empty(
+            shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+        for i, grad in enumerate(sp.gradient(self.moving_image)):
+            self.gradient_moving[..., i] = grad
 
-            self.gradient_static = np.empty(
-                shape=(self.static_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.staticq_means_field)):
-                self.gradient_static[..., i] = grad
-        else: #choose movingq_means_field as moving
-            self.gradient_moving = np.empty(
-                shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.movingq_means_field)):
-                self.gradient_moving[..., i] = grad
-
-            self.gradient_static = np.empty(
-                shape=(self.static_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.static_image)):
-                self.gradient_static[..., i] = grad
+        self.gradient_static = np.empty(
+            shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+        for i, grad in enumerate(sp.gradient(self.static_image)):
+            self.gradient_static[..., i] = grad
 
         #Convert the moving image's gradient field from voxel to physical space
         if self.moving_spacing is not None:
@@ -219,11 +161,12 @@ class ECCMetric(SimilarityMetric):
             the transformation that was applied to the original_static_image 
             to generate the current static image
         """
-        self.static_image_mask = (original_static_image>0).astype(np.int32)
-        if transformation == None:
-            return
-        self.static_image_mask = \
-            transformation.transform(self.static_image_mask,'nn')
+        #self.static_image_mask = (original_static_image>0).astype(np.int32)
+        #if transformation == None:
+        #    return
+        #self.static_image_mask = \
+        #    transformation.transform(self.static_image_mask,'nn')
+        pass
 
     def use_moving_image_dynamics(self, original_moving_image, transformation):
         r"""
@@ -242,11 +185,126 @@ class ECCMetric(SimilarityMetric):
             the transformation that was applied to the original_moving_image 
             to generate the current moving image
         """
-        self.moving_image_mask = (original_moving_image>0).astype(np.int32)
-        if transformation == None:
-            return
-        self.moving_image_mask = \
-            transformation.transform(self.moving_image_mask,'nn')
+        #self.moving_image_mask = (original_moving_image>0).astype(np.int32)
+        #if transformation == None:
+        #    return
+        #self.moving_image_mask = \
+        #    transformation.transform(self.moving_image_mask,'nn')
+        pass
+
+    def use_image_dynamics(self, original_static, static_affine, static_transform, 
+                           original_moving, moving_affine, moving_transform):
+        r"""
+        ECCMetric takes advantage of the image dynamics by computing the
+        current moving/static image masks from the original moving/static 
+        image masks(warped with nearest neighbor interpolation)
+
+        Parameters
+        ----------
+        original_static : array, shape (R, C) or (S, R, C)
+            the original moving image from which the current moving image was
+            generated, the current moving image is the one that was provided 
+            via 'set_moving_image(...)', which may not be the same as the
+            original moving image but a warped version of it.
+        static_affine: array, shape 3x3 (for 2D images) or 4x4 (for 3D images)
+            the voxel-to-space transformation associated to the static image
+        static_transform : DiffeomorphicMap object
+            the transformation that was applied to the original_moving_image 
+            to generate the current moving image
+        original_moving_image : array, shape (R, C) or (S, R, C)
+            the original moving image from which the current moving image was
+            generated, the current moving image is the one that was provided 
+            via 'set_moving_image(...)', which may not be the same as the
+            original moving image but a warped version of it.
+        moving_affine: array, shape 3x3 (for 2D images) or 4x4 (for 3D images)
+            the voxel-to-space transformation associated to the moving image
+        static_transform : DiffeomorphicMap object
+            the transformation that was applied to the original_moving_image 
+            to generate the current moving image
+        moving_transform : DiffeomorphicMap object
+            the transformation that was applied to the original_moving_image 
+            to generate the current moving image
+        """
+        self.static_image_mask = (original_static>0).astype(np.int32)
+        self.moving_image_mask = (original_moving>0).astype(np.int32)
+        #We assume that either both transforms are None or none of them is
+        if (static_transform is not None) and (moving_transform is not None):
+            #compute the full warping
+            composition = moving_transform.warp_endomorphism(static_transform.inverse()).inverse()
+
+            static_shape = np.asarray(original_static.shape, dtype=np.int32)
+            moving_shape = np.asarray(original_moving.shape, dtype=np.int32)
+            #The cost of the following inversions is negligible compared to the
+            #overall complexity of the registration algorithm
+            static_affine_inv = np.linalg.inv(static_affine)
+            moving_affine_inv = np.linalg.inv(moving_affine)
+
+            #Warp the original moving image/mask at its original resolution
+            self.wmoving = composition.transform(original_moving, 'lin', moving_affine_inv,
+                                                 static_shape, static_affine)
+            self.wmoving_mask = composition.transform(self.moving_image_mask, 'nn', moving_affine_inv,
+                                                      static_shape, static_affine)
+        
+            #Warp the original static image/mask at its original resolution
+            self.wstatic = composition.transform_inverse(original_static, 'lin', static_affine_inv,
+                                                 moving_shape, moving_affine)
+            self.wstatic_mask = composition.transform_inverse(self.static_image_mask, 'nn', static_affine_inv,
+                                                      moving_shape, moving_affine)
+        else:#We assume the transforms are identities
+            self.wmoving = original_moving
+            self.wstatic = original_static
+            self.wstatic_mask = self.static_image_mask
+            self.wmoving_mask = self.moving_image_mask
+
+        #Compute the sampling masks and quantizations
+        #Note: since now we iterate at the fool resolution, the quantization and
+        #native masks don't change over time
+        self.sampling_static = self.static_image_mask * self.wmoving_mask
+        self.sampling_moving = self.moving_image_mask * self.wstatic_mask
+        
+        #Quantize the original static (fine resolution) and compute the 
+        #mean/sigma_sq fields from it
+        self.staticq, self.staticq_levels, hist = \
+            self.quantize(original_static,self.q_levels)
+        self.staticq = np.asarray(self.staticq)
+        staticq_means, staticq_variances = self.compute_stats(self.sampling_static,
+                                                              self.wmoving,
+                                                              self.q_levels,
+                                                              self.staticq)
+        staticq_means[0] = 0
+        self.staticq_means = np.array(staticq_means)
+        self.staticq_variances = np.array(staticq_variances)
+        self.staticq_variances[np.isinf(self.staticq_variances)] = -1
+        self.staticq_variances[self.staticq_variances < 0 ] = self.staticq_variances.max()
+        self.staticq_sigma_sq_field_fine = self.staticq_variances[self.staticq]
+        self.staticq_means_field_fine = self.staticq_means[self.staticq]
+
+        #Quantize the original moving (fine resolution) and compute the 
+        #mean/sigma_sq fields from it
+        self.movingq, self.movingq_levels, hist = \
+            self.quantize(original_moving,self.q_levels)
+        self.movingq = np.asarray(self.movingq)
+        movingq_means, movingq_variances = self.compute_stats(self.sampling_moving,
+                                                              self.wstatic,
+                                                              self.q_levels,
+                                                              self.movingq)
+        movingq_means[0] = 0
+        self.movingq_means = np.array(movingq_means)
+        self.movingq_variances = np.array(movingq_variances)
+        self.movingq_variances[np.isinf(self.movingq_variances)] = -1
+        self.movingq_variances[self.movingq_variances < 0] = self.movingq_variances.max()
+        self.movingq_sigma_sq_field_fine = self.movingq_variances[self.movingq]
+        self.movingq_means_field_fine = self.movingq_means[self.movingq]
+
+        #Now this is the point of executing EM at the full resolution:
+        #Instead of first warping the images to a coarser resolution and
+        #computing statistics from its quantizations, compute the stats
+        #at the fine resolution and then warp them to a coarser resolution
+        self.staticq_means_field = static_transform.transform(self.staticq_means_field_fine)
+        self.movingq_means_field = moving_transform.transform(self.movingq_means_field_fine)
+        self.staticq_sigma_sq_field = static_transform.transform(self.staticq_sigma_sq_field_fine)
+        self.movingq_sigma_sq_field = moving_transform.transform(self.movingq_sigma_sq_field_fine)
+        
 
     def get_energy(self):
         r"""
