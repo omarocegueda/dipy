@@ -1,7 +1,7 @@
 from __future__ import print_function
 import numpy as np
 import scipy as sp
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import abc
 from scipy import gradient, ndimage
 import dipy.align.vector_fields as vfu
