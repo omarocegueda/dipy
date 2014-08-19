@@ -1371,6 +1371,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                                                codomain_shape,
                                                codomain_affine,
                                                prealign_inv)
+        self.moving_to_ref.prealign = prealign_inv
+        self.moving_to_ref.prealign_inv = prealign
         self.moving_to_ref.allocate()
 
     def _end_optimizer(self):
