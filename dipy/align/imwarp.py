@@ -1636,9 +1636,18 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                   % (stats[1], stats[2]))
 
         #Compose the two partial transformations
-        self.static_to_ref = self.moving_to_ref.warp_endomorphism(
-                                    self.static_to_ref.inverse()).inverse()
-                
+        #self.static_to_ref = self.moving_to_ref.warp_endomorphism(
+        #                            self.static_to_ref.inverse()).inverse()
+        
+        self.static_to_ref = self.static_to_ref.warp_endomorphism(
+                                    self.moving_to_ref.inverse())
+        
+        #Hack: we just want the pre-align to be post-align
+        self.static_to_ref.prealign_inv = self.moving_to_ref.prealign
+        self.static_to_ref.prealign = self.moving_to_ref.prealign_inv
+        self.static_to_ref.is_inverse = true
+        self.static_to_ref.forward, self.static_to_ref.backward = self.static_to_ref.backward, self.static_to_ref.forward
+
         # Report mean and std for the composed deformation field
         residual, stats = self.static_to_ref.compute_inversion_error()
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
