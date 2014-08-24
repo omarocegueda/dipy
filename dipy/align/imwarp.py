@@ -1514,8 +1514,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 self.static_to_ref.forward,
                 current_disp_affine_inv,
                 current_disp_spacing,
-                #self.inv_iter, self.inv_tol, self.static_to_ref.backward))
-                self.inv_iter, self.inv_tol, None))
+                self.inv_iter, self.inv_tol, self.static_to_ref.backward))
+                #self.inv_iter, self.inv_tol, None))
 
         #Invert the backward model's forward field
         self.moving_to_ref.backward = np.array(
@@ -1523,8 +1523,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 self.moving_to_ref.forward,
                 current_disp_affine_inv,
                 current_disp_spacing,
-                #self.inv_iter, self.inv_tol, self.moving_to_ref.backward))
-                self.inv_iter, self.inv_tol, None))
+                self.inv_iter, self.inv_tol, self.moving_to_ref.backward))
+                #self.inv_iter, self.inv_tol, None))
 
         #Invert the forward model's backward field
         self.static_to_ref.forward = np.array(
