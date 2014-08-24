@@ -1229,10 +1229,10 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         """
 
         mean_norm = np.sqrt(np.sum((np.array(current_displacement) ** 2), -1)).mean()
-        updated, stats = self.compose(current_displacement, new_displacement,
-                                      None, affine_inv, time_scaling)
+        stats = self.compose(current_displacement, new_displacement,
+                                      None, affine_inv, time_scaling, current_displacement)
 
-        return np.array(updated), np.array(mean_norm)
+        return np.array(current_displacement), np.array(mean_norm)
 
     def get_map(self):
         r"""Returns the resulting diffeomorphic map
@@ -1250,10 +1250,10 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         """
         if self.dim == 2:
             self.invert_vector_field = vfu.invert_vector_field_fixed_point_2d
-            self.compose = vfu.compose_vector_fields_2d
+            self.compose = vfu.compose_vector_fields_ants_2d
         else:
             self.invert_vector_field = vfu.invert_vector_field_fixed_point_3d
-            self.compose = vfu.compose_vector_fields_3d
+            self.compose = vfu.compose_vector_fields_ants_3d
 
     def _init_optimizer(self, static, moving, 
                         static_affine, moving_affine, prealign):
@@ -1426,7 +1426,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                                                         None,
                                                         current_disp_shape,
                                                         current_disp_affine)
-        
+
         #Pass both images to the metric. Now both images are sampled on the
         #reference grid (equal to the static image's grid) and the direction
         #doesn't change across scales
@@ -1446,8 +1446,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             self.callback(self, RegistrationStages.ITER_START)
 
         #Free some memory (useful when using double precision)
-        del self.static_to_ref.backward
-        del self.moving_to_ref.backward
+        #del self.static_to_ref.backward
+        #del self.moving_to_ref.backward
 
         #Compute the forward step (to be used to update the forward transform) 
         fw_step = np.array(self.metric.compute_forward())
@@ -1460,9 +1460,11 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
 
         #Normalize the forward step
         nrm = np.sqrt(np.sum((fw_step/current_disp_spacing)**2, -1)).max()
+        total = np.sqrt(np.sum((fw_step/current_disp_spacing)**2, -1)).sum()
         if nrm>0:
             fw_step /= nrm
-        
+
+        nrm_after = np.sqrt(np.sum((fw_step/current_disp_spacing)**2, -1)).max()
         #Add to current total field
         self.static_to_ref.forward, md_forward = self.update(
             self.static_to_ref.forward, fw_step, 
@@ -1512,6 +1514,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 self.static_to_ref.forward,
                 current_disp_affine_inv,
                 current_disp_spacing,
+                #self.inv_iter, self.inv_tol, self.static_to_ref.backward))
                 self.inv_iter, self.inv_tol, None))
 
         #Invert the backward model's forward field
@@ -1520,6 +1523,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 self.moving_to_ref.forward,
                 current_disp_affine_inv,
                 current_disp_spacing,
+                #self.inv_iter, self.inv_tol, self.moving_to_ref.backward))
                 self.inv_iter, self.inv_tol, None))
 
         #Invert the forward model's backward field
@@ -1528,6 +1532,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 self.static_to_ref.backward,
                 current_disp_affine_inv,
                 current_disp_spacing,
+                #self.inv_iter, self.inv_tol, None))
                 self.inv_iter, self.inv_tol, self.static_to_ref.forward))
 
         #Invert the backward model's backward field
@@ -1536,6 +1541,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 self.moving_to_ref.backward,
                 current_disp_affine_inv,
                 current_disp_spacing,
+                #self.inv_iter, self.inv_tol, None))
                 self.inv_iter, self.inv_tol, self.moving_to_ref.forward))
 
         #Free resources no longer needed to compute the forward and backward

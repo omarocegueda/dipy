@@ -288,7 +288,7 @@ class CCMetric(SimilarityMetric):
         the moving image towards the static image
         """
         displacement, self.energy = self.compute_forward_step(
-            self.gradient_static, self.gradient_moving, self.factors)
+            self.gradient_static, self.gradient_moving, self.factors, 0)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
@@ -303,7 +303,7 @@ class CCMetric(SimilarityMetric):
         """
         displacement, energy=self.compute_backward_step(self.gradient_static,
                                       self.gradient_moving,
-                                      self.factors)
+                                      self.factors, 0)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
@@ -432,7 +432,7 @@ class EMMetric(SimilarityMetric):
             self.gradient_moving[..., i] = grad
 
         #Convert the moving image's gradient field from voxel to physical space
-        if self.moving_spacing is not None:    
+        if self.moving_spacing is not None:
             self.gradient_moving /= self.moving_spacing
         if self.moving_direction is not None:
             self.reorient_vector_field(self.gradient_moving,
