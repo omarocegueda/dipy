@@ -288,7 +288,7 @@ class CCMetric(SimilarityMetric):
         the moving image towards the static image
         """
         displacement, self.energy = self.compute_forward_step(
-            self.gradient_static, self.gradient_moving, self.factors, 0)
+            self.gradient_static, self.gradient_moving, self.factors, self.radius)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
@@ -303,7 +303,7 @@ class CCMetric(SimilarityMetric):
         """
         displacement, energy=self.compute_backward_step(self.gradient_static,
                                       self.gradient_moving,
-                                      self.factors, 0)
+                                      self.factors, self.radius)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
