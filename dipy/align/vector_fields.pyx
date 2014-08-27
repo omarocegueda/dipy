@@ -1301,13 +1301,13 @@ def simplify_warp_function_3d(floating[:,:,:,:] d,
              and we identify U = Rinv * C, V = Dinv * Pinv * C, W = Dinv * Pinv
     """
     cdef:
-        int nrows = sampling_shape[0]
-        int ncols = sampling_shape[1]
-        int nslices = sampling_shape[2]
+        int nslices = sampling_shape[0]
+        int nrows = sampling_shape[1]
+        int ncols = sampling_shape[2]
         int i, j, k
         double di, dj, dk, dii, djj, dkk
         floating[:] tmp = np.zeros((3,), dtype=np.asarray(d).dtype)
-        floating[:,:,:,:] out= np.zeros(shape=(nrows, ncols, nslices, 3), 
+        floating[:,:,:,:] out= np.zeros(shape=(nslices, nrows, ncols, 3), 
                                         dtype=np.asarray(d).dtype)
     with nogil:
 

@@ -1067,6 +1067,7 @@ class DiffeomorphicMap(object):
         affine_idx_in = mult_aff(Rinv, C)
         affine_idx_out = mult_aff(Dinv, mult_aff(Pinv, C))
         affine_disp = mult_aff(Dinv, Pinv)
+
         new_backward = simplify_f(self.backward, affine_idx_in, 
                                   affine_idx_out, affine_disp,
                                   self.codomain_shape)
