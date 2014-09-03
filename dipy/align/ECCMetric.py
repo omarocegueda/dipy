@@ -48,16 +48,16 @@ class ECCMetric(SimilarityMetric):
             self.compute_backward_step = cc.compute_cc_backward_step_2d
             self.reorient_vector_field = vfu.reorient_vector_field_2d
 
-            self.quantize = em.quantize_positive_image
-            self.compute_stats = em.compute_masked_image_class_stats
+            self.quantize = em.quantize_positive_2d
+            self.compute_stats = em.compute_masked_class_stats_2d
         elif self.dim == 3:
             self.precompute_factors = cc.precompute_cc_factors_3d
             self.compute_forward_step = cc.compute_cc_forward_step_3d
             self.compute_backward_step = cc.compute_cc_backward_step_3d
             self.reorient_vector_field = vfu.reorient_vector_field_3d
 
-            self.quantize = em.quantize_positive_volume
-            self.compute_stats = em.compute_masked_volume_class_stats
+            self.quantize = em.quantize_positive_3d
+            self.compute_stats = em.compute_masked_class_stats_3d
         else:
             print('CC Metric not defined for dimension %d'%(self.dim))
 
@@ -70,7 +70,7 @@ class ECCMetric(SimilarityMetric):
         #Estimate the hidden variables (EM-initialization)
         ##################################################
         #Use only the foreground intersection for estimation
-        sampling_mask = self.static_image_mask*self.moving_image_mask
+        sampling_mask = np.array(self.static_image_mask*self.moving_image_mask, dtype = np.int32)
         self.sampling_mask = sampling_mask
         
         #Process the Static image quantization
@@ -115,13 +115,13 @@ class ECCMetric(SimilarityMetric):
                                              self.moving_image,
                                              self.radius)
             self.movingq_factors = self.staticq_factors
-            print('Staticq selected')
+            #print('Staticq selected')
         else:
             self.movingq_factors = self.precompute_factors(self.static_image,
                                              self.movingq_means_field,
                                              self.radius)
             self.staticq_factors = self.movingq_factors
-            print('Movingq selected')
+            #print('Movingq selected')
         self.staticq_factors = np.array(self.staticq_factors)
         self.movingq_factors = np.array(self.movingq_factors)
         
@@ -222,8 +222,10 @@ class ECCMetric(SimilarityMetric):
         self.static_image_mask = (original_static_image>0).astype(np.int32)
         if transformation == None:
             return
+        shape = np.array(self.static_image.shape, dtype = np.int32)
+        affine = self.static_affine
         self.static_image_mask = \
-            transformation.transform(self.static_image_mask,'nn')
+            transformation.transform(self.static_image_mask,'nearest', None, shape, affine)
 
     def use_moving_image_dynamics(self, original_moving_image, transformation):
         r"""
@@ -245,8 +247,10 @@ class ECCMetric(SimilarityMetric):
         self.moving_image_mask = (original_moving_image>0).astype(np.int32)
         if transformation == None:
             return
+        shape = np.array(self.moving_image.shape, dtype = np.int32)
+        affine = self.moving_affine
         self.moving_image_mask = \
-            transformation.transform(self.moving_image_mask,'nn')
+            transformation.transform(self.moving_image_mask,'nearest', None, shape, affine)
 
     def get_energy(self):
         r"""
