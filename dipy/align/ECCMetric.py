@@ -137,27 +137,37 @@ class ECCMetric(SimilarityMetric):
         ##################################################
         #Compute the gradients (common initialization)
         ##################################################
-        if staticq_mse < movingq_mse: #choose staticq_means_field as static
+        if only_one_modality:
+            if staticq_mse < movingq_mse: #choose staticq_means_field as static
+                self.gradient_moving = np.empty(
+                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.moving_image)):
+                    self.gradient_moving[..., i] = grad
+
+                self.gradient_static = np.empty(
+                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.staticq_means_field)):
+                    self.gradient_static[..., i] = grad
+            else: #choose movingq_means_field as moving
+                self.gradient_moving = np.empty(
+                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.movingq_means_field)):
+                    self.gradient_moving[..., i] = grad
+
+                self.gradient_static = np.empty(
+                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.static_image)):
+                    self.gradient_static[..., i] = grad
+        else:
             self.gradient_moving = np.empty(
-                shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
             for i, grad in enumerate(sp.gradient(self.moving_image)):
                 self.gradient_moving[..., i] = grad
 
             self.gradient_static = np.empty(
-                shape=(self.static_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.staticq_means_field)):
-                self.gradient_static[..., i] = grad
-        else: #choose movingq_means_field as moving
-            self.gradient_moving = np.empty(
-                shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.movingq_means_field)):
-                self.gradient_moving[..., i] = grad
-
-            self.gradient_static = np.empty(
-                shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
             for i, grad in enumerate(sp.gradient(self.static_image)):
                 self.gradient_static[..., i] = grad
-
         #Convert the moving image's gradient field from voxel to physical space
         if self.moving_spacing is not None:
             self.gradient_moving /= self.moving_spacing
