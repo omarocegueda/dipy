@@ -323,7 +323,8 @@ def test_scale_space_exceptions():
         assert_raises(ValueError, ss.get_image, invalid_level)
 
     # Verify that the mask is correctly applied, when requested
-    ss = imwarp.ScaleSpace(image,3, mask0=True)
+    mask0 = (image).astype(np.int32)
+    ss = imwarp.ScaleSpace(image,3, mask=mask0)
     for level in range(3):
         img = ss.get_image(level)
         z = (img == 0).astype(np.int32)

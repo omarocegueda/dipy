@@ -30,10 +30,11 @@ def test_EMMetric_image_dynamics():
     #compute the expected binary mask
     expected = (image > 0).astype(np.int32)
 
-    metric.use_static_image_dynamics(image, None)
+    mask0 = (image>0).astype(np.int32)
+    metric.use_static_image_dynamics(image, mask0, None)
     assert_array_equal(expected, metric.static_image_mask)
 
-    metric.use_moving_image_dynamics(image, None)
+    metric.use_moving_image_dynamics(image, mask0, None)
     assert_array_equal(expected, metric.moving_image_mask)
 
 def test_em_demons_step_2d():

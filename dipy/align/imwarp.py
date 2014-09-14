@@ -100,7 +100,7 @@ class ScaleSpace(object):
                  codomain_affine=None,
                  input_spacing=None,
                  sigma_factor=0.2,
-                 mask0=False):
+                 mask=None):
         r""" ScaleSpace
 
         Computes the Scale Space representation of an image. The scale space is
@@ -126,20 +126,18 @@ class ScaleSpace(object):
         sigma_factor : float
             the smoothing factor to be used in the construction of the scale
             space.
-        mask0 : Boolean
-            if True, all smoothed images will be zero at all voxels that are
-            zero in the input image. 
+        mask : array, shape (r,c) or (s, r, c) 
+            all voxels of mask equal to zero are considered background (all
+            smooth images will be zero along the background).
 
         """
         self.dim = len(image.shape)
         self.num_levels = num_levels
         input_size = np.array(image.shape)
-        if mask0:
-            mask = np.asarray(image>0, dtype=np.int32)
         
         #normalize input image to [0,1]
         img = (image - image.min())/(image.max() - image.min())
-        if mask0:
+        if mask is not None:
             img *= mask
 
         #The properties are saved in separate lists. Insert input image
@@ -187,7 +185,7 @@ class ScaleSpace(object):
             filtered = sp.ndimage.filters.gaussian_filter(image, sigmas)
             filtered = ((filtered - filtered.min())/
                        (filtered.max() - filtered.min()))
-            if mask0:
+            if mask is not None:
                 filtered *= mask
 
             #Add current level to the scale space
@@ -1200,7 +1198,6 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.static_ss = None
         self.static_direction = None
         self.moving_direction = None
-        self.mask0 = metric.mask0
 
     def update(self, current_displacement, new_displacement,
                affine_inv, time_scaling):
@@ -1256,7 +1253,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             self.compose = vfu.compose_vector_fields_3d
 
     def _init_optimizer(self, static, moving, 
-                        static_affine, moving_affine, prealign):
+                        static_affine, moving_affine, prealign, 
+                        static_mask=None, moving_mask=None):
         r"""Initializes the registration optimizer
 
         Initializes the optimizer by computing the scale space of the input
@@ -1283,9 +1281,21 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         prealign: array, shape (dim+1, dim+1)
             the affine transformation (operating on the physical space) 
             pre-aligning the moving image towards the static
+        static_mask: array, shape (S, R, C) or (R, C)
+            those voxels where static_mask equals zero will be considered
+            background in the static image. If None, all voxels are considered
+            foreground
+        moving_mask: array, shape (S, R, C) or (R, C)
+            those voxels where moving_mask equals zero will be considered
+            background in the static image. If None, all voxels are considered
+            foreground
 
         """
         self._connect_functions()
+        #Keep a reference to the masks to pass them to the metric when needed
+        self.static_mask = static_mask
+        self.moving_mask = moving_mask
+
         #Extract information from the affine matrices to create the scale space
         static_direction, static_spacing = \
             get_direction_and_spacings(static_affine, self.dim)
@@ -1298,7 +1308,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
 
         #Build the scale space of the input images
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Applying zero mask: ' + str(self.mask0))
+            print('Using static mask: ' + str(static_mask is not None))
+            print('Using moving mask: ' + str(moving_mask is not None))
 
         if self.verbosity >= VerbosityLevels.STATUS:
             print('Creating scale space from the moving image. Levels: %d. '
@@ -1306,7 +1317,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         
         self.moving_ss = ScaleSpace(moving, self.levels, moving_affine,
                                     moving_spacing, self.ss_sigma_factor,
-                                    self.mask0)
+                                    moving_mask)
 
         if self.verbosity >= VerbosityLevels.STATUS:
             print('Creating scale space from the static image. Levels: %d. '
@@ -1314,7 +1325,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         
         self.static_ss = ScaleSpace(static, self.levels, static_affine,
                                     static_spacing, self.ss_sigma_factor,
-                                    self.mask0)
+                                    static_mask)
 
         if self.verbosity >= VerbosityLevels.DEBUG:
             print('Moving scale space:')
@@ -1430,12 +1441,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.metric.set_moving_image(wmoving, current_disp_affine, 
             current_disp_spacing, self.static_direction)
         self.metric.use_moving_image_dynamics(
-            current_moving, self.moving_to_ref.inverse())
+            current_moving, self.moving_mask, self.moving_to_ref.inverse())
 
         self.metric.set_static_image(wstatic, current_disp_affine, 
             current_disp_spacing, self.static_direction)
         self.metric.use_static_image_dynamics(
-            current_static, self.static_to_ref.inverse())
+            current_static, self.static_mask, self.static_to_ref.inverse())
 
         #Initialize the metric for a new iteration
         self.metric.initialize_iteration()
@@ -1654,7 +1665,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             self.callback(self, RegistrationStages.OPT_END)
 
     def optimize(self, static, moving, static_affine=None, moving_affine=None, 
-                 prealign=None):
+                 prealign=None, static_mask=None, moving_mask=None):
         r"""
         Starts the optimization
 
@@ -1693,7 +1704,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             print("Pre-align:", prealign)
 
         self._init_optimizer(static.astype(floating), moving.astype(floating), 
-                             static_affine, moving_affine, prealign)
+                             static_affine, moving_affine, prealign,
+                             static_mask, moving_mask)
         self._optimize()
         self._end_optimizer()
         return self.static_to_ref

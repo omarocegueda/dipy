@@ -90,6 +90,7 @@ class SimilarityMetric(with_metaclass(abc.ABCMeta, object)):
 
     def use_static_image_dynamics(self,
                                  original_static_image,
+                                 original_static_mask,
                                  transformation):
         r"""This is called by the optimizer just after setting the static image.
 
@@ -104,6 +105,10 @@ class SimilarityMetric(with_metaclass(abc.ABCMeta, object)):
         ----------
         original_static_image : array, shape (R, C) or (S, R, C)
             the original image from which the current static image was generated
+        original_static_mask : array, shape (R, C) or (S, R, C)
+            those voxels where original_static_image equals zero will be
+            considered background in the original_static_image. If None, all
+            voxels are considered foreground
         transformation : DiffeomorphicMap object
             the transformation that was applied to original image to generate
             the current static image
@@ -130,6 +135,7 @@ class SimilarityMetric(with_metaclass(abc.ABCMeta, object)):
 
     def use_moving_image_dynamics(self,
                                original_moving_image,
+                               original_moving_mask,
                                transformation):
         r"""This is called by the optimizer just after setting the moving image.
 
@@ -144,6 +150,10 @@ class SimilarityMetric(with_metaclass(abc.ABCMeta, object)):
         ----------
         original_moving_image : array, shape (R, C) or (S, R, C)
             the original image from which the current moving image was generated
+        original_moving_mask : array, shape (R, C) or (S, R, C)
+            those voxels where original_moving_mask equals zero will be
+            considered background in the original_moving_image. If None, all
+            voxels are considered foreground
         transformation : DiffeomorphicMap object
             the transformation that was applied to original image to generate
             the current moving image
@@ -614,7 +624,8 @@ class EMMetric(SimilarityMetric):
         """
         return self.energy
 
-    def use_static_image_dynamics(self, original_static_image, transformation):
+    def use_static_image_dynamics(self, original_static_image,
+                                  original_static_mask, transformation):
         r"""This is called by the optimizer just after setting the static image.
 
         EMMetric takes advantage of the image dynamics by computing the
@@ -634,15 +645,21 @@ class EMMetric(SimilarityMetric):
             the transformation that was applied to the original_static_image 
             to generate the current static image
         """
-        self.static_image_mask = (original_static_image>0).astype(np.int32)
+        if original_static_mask is not None:
+            self.static_image_mask = original_static_mask
+        else:
+            self.static_image_mask = (original_static_image>0).astype(np.int32)
+
         if transformation == None:
             return
+
         shape = np.array(self.static_image.shape, dtype = np.int32)
         affine = self.static_affine
         self.static_image_mask = \
-            transformation.transform(self.static_image_mask,'nearest', None, shape, affine)
+            transformation.transform(self.static_image_mask ,'nearest', None, shape, affine)
 
-    def use_moving_image_dynamics(self, original_moving_image, transformation):
+    def use_moving_image_dynamics(self, original_moving_image, 
+                                  original_moving_mask, transformation):
         r"""This is called by the optimizer just after setting the moving image.
 
         EMMetric takes advantage of the image dynamics by computing the
@@ -660,13 +677,18 @@ class EMMetric(SimilarityMetric):
             the transformation that was applied to the original_moving_image 
             to generate the current moving image
         """
-        self.moving_image_mask = (original_moving_image>0).astype(np.int32)
+        if original_moving_mask is not None:
+            self.moving_image_mask = original_moving_mask
+        else:
+            self.moving_image_mask = (original_moving_image>0).astype(np.int32)
+
         if transformation == None:
             return
+
         shape = np.array(self.moving_image.shape, dtype = np.int32)
         affine = self.moving_affine
         self.moving_image_mask = \
-            transformation.transform(self.moving_image_mask,'nearest', None, shape, affine)
+            transformation.transform(self.moving_image_mask ,'nearest', None, shape, affine)
 
 
 class SSDMetric(SimilarityMetric):
