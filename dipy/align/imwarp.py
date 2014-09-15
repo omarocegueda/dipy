@@ -1703,6 +1703,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         if self.verbosity >= VerbosityLevels.DEBUG:
             print("Pre-align:", prealign)
 
+        if static_mask is not None:
+            static_mask = (static_mask>0).astype(np.int32)
+
+        if moving_mask is not None:
+            moving_mask = (moving_mask>0).astype(np.int32)
+
         self._init_optimizer(static.astype(floating), moving.astype(floating), 
                              static_affine, moving_affine, prealign,
                              static_mask, moving_mask)
