@@ -206,7 +206,9 @@ def precompute_cc_factors_3d_test(floating[:, :, :] static,
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def compute_cc_forward_step_3d(floating[:, :, :, :] grad_static,
+def compute_cc_forward_step_3d(floating[:, :, :] I,
+                               floating[:, :, :] J,
+                               floating[:, :, :, :] grad_static,
                                floating[:, :, :, :] factors,
                                cnp.npy_intp radius):
     r"""Gradient of the CC Metric w.r.t. the forward transformation
@@ -277,8 +279,9 @@ def compute_cc_forward_step_3d(floating[:, :, :, :] grad_static,
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-
-def compute_cc_backward_step_3d(floating[:, :, :, :] grad_moving,
+def compute_cc_backward_step_3d(floating[:, :, :] I,
+                                floating[:, :, :] J,
+                                floating[:, :, :, :] grad_moving,
                                 floating[:, :, :, :] factors,
                                 cnp.npy_intp radius):
     r"""Gradient of the CC Metric w.r.t. the backward transformation
@@ -517,7 +520,9 @@ def precompute_cc_factors_2d_test(floating[:, :] static, floating[:, :] moving,
 @cython.wraparound(False)
 @cython.cdivision(True)
 
-def compute_cc_forward_step_2d(floating[:, :, :] grad_static,
+def compute_cc_forward_step_2d(floating[:, :] I,
+                               floating[:, :] J,
+                               floating[:, :, :] grad_static,
                                floating[:, :, :] factors,
                                cnp.npy_intp radius):
     r"""Gradient of the CC Metric w.r.t. the forward transformation
@@ -590,7 +595,9 @@ def compute_cc_forward_step_2d(floating[:, :, :] grad_static,
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def compute_cc_backward_step_2d(floating[:, :, :] grad_moving,
+def compute_cc_backward_step_2d(floating[:, :] I,
+                                floating[:, :] J,
+                                floating[:, :, :] grad_moving,
                                 floating[:, :, :] factors,
                                 cnp.npy_intp radius):
     r"""Gradient of the CC Metric w.r.t. the backward transformation

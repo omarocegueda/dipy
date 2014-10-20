@@ -89,7 +89,8 @@ for modulename, other_sources, language in (
     ('dipy.align.vector_fields', [], 'c'),
     ('dipy.align.sumsqdiff', [], 'c'),
     ('dipy.align.expectmax', [], 'c'),
-    ('dipy.align.crosscorr', [], 'c')
+    ('dipy.align.crosscorr', [], 'c'),
+    ('dipy.align.crosscorr_fixed', [], 'c')
     ):
     pyx_src = pjoin(*modulename.split('.')) + '.pyx'
     EXTS.append(Extension(modulename, [pyx_src] + other_sources,

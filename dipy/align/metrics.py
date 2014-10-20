@@ -8,7 +8,8 @@ import scipy as sp
 from scipy import gradient, ndimage
 import dipy.align.vector_fields as vfu
 from dipy.align import sumsqdiff as ssd
-from dipy.align import crosscorr as cc
+from dipy.align import crosscorr_fixed as cc
+#from dipy.align import crosscorr as cc
 from dipy.align import expectmax as em
 from dipy.align import floating
 
@@ -243,9 +244,10 @@ class CCMetric(SimilarityMetric):
         re-orienting the gradients in the voxel space using the corresponding
         affine transformations.
         """
+        rr = self.radius/(2**self.levels_above)
         self.factors = self.precompute_factors(self.static_image,
                                              self.moving_image,
-                                             self.radius)
+                                             rr)
         self.factors = np.array(self.factors)
 
         self.gradient_moving = np.empty(
@@ -285,8 +287,9 @@ class CCMetric(SimilarityMetric):
         Computes the update displacement field to be used for registration of
         the moving image towards the static image
         """
-        displacement, self.energy = self.compute_forward_step(
-            self.gradient_static, self.factors, self.radius)
+        rr = self.radius/(2**self.levels_above)
+        displacement, self.energy = self.compute_forward_step(self.static_image, self.moving_image,
+            self.gradient_static, self.factors, rr)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
@@ -299,8 +302,9 @@ class CCMetric(SimilarityMetric):
         Computes the update displacement field to be used for registration of
         the static image towards the moving image
         """
-        displacement, energy=self.compute_backward_step(
-            self.gradient_moving, self.factors, self.radius)
+        rr = self.radius/(2**self.levels_above)
+        displacement, energy=self.compute_backward_step(self.static_image, self.moving_image,
+            self.gradient_moving, self.factors, rr)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
