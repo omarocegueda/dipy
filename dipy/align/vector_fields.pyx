@@ -148,17 +148,17 @@ cdef inline int _interpolate_vector_2d(floating[:,:,:] field, double dii,
         out[1] = 0
     #---top-right
     jj += 1
-    if(jj < nc):
+    if (jj < nc) and (ii >= 0):
         out[0] += alpha * cbeta * field[ii, jj, 0]
         out[1] += alpha * cbeta * field[ii, jj, 1]
     #---bottom-right
     ii += 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (jj < nc) and (ii < nr):
         out[0] += calpha * cbeta * field[ii, jj, 0]
         out[1] += calpha * cbeta * field[ii, jj, 1]
     #---bottom-left
     jj -= 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (jj >= 0) and (ii < nr):
         out[0] += calpha * beta * field[ii, jj, 0]
         out[1] += calpha * beta * field[ii, jj, 1]
     return 1
@@ -243,21 +243,21 @@ cdef inline int _interpolate_scalar_2d(floating[:,:] image, double dii,
     alpha = 1 - calpha
     beta = 1 - cbeta
 
-    if (ii>=0) and (jj>=0):
+    if (ii >= 0) and (jj >= 0):
         out[0] = alpha * beta * image[ii, jj]
     else:
         out[0] = alpha * beta * image[ii, jj]
     #---top-right
     jj += 1
-    if(jj < nc):
+    if (jj < nc) and (ii >= 0):
         out[0] += alpha * cbeta * image[ii, jj]
     #---bottom-right
     ii += 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (jj < nc) and (ii < nr):
         out[0] += calpha * cbeta * image[ii, jj]
     #---bottom-left
     jj -= 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (jj >= 0) and (ii < nr):
         out[0] += calpha * beta * image[ii, jj]
     return 1
 
@@ -544,36 +544,37 @@ cdef inline int _interpolate_scalar_3d(floating[:,:,:] volume,
     beta = 1 - cbeta
     gamma = 1 - cgamma
     #---top-left
-    if (ii>=0) and (jj>=0) and (kk>=0):
+    if (ii >= 0) and (jj >= 0) and (kk >= 0):
         out[0] = alpha * beta * gamma * volume[kk, ii, jj]
     else:
         out[0] = 0
     #---top-right
     jj += 1
-    if(jj < nc):
+    if (ii >= 0) and (jj < nc) and (kk >= 0):
         out[0] += alpha * cbeta * gamma * volume[kk, ii, jj]
     #---bottom-right
     ii += 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (ii < nr) and (jj < nc) and (kk >= 0):
         out[0] += calpha * cbeta * gamma * volume[kk, ii, jj]
     #---bottom-left
     jj -= 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (ii  < nr) and (jj >= 0) and (kk >= 0):
         out[0] += calpha * beta * gamma * volume[kk, ii, jj]
     kk += 1
     if(kk < ns):
         ii -= 1
-        out[0] += alpha * beta * cgamma * volume[kk, ii, jj]
+        if (ii >= 0) and (jj >= 0):
+            out[0] += alpha * beta * cgamma * volume[kk, ii, jj]
         jj += 1
-        if(jj < nc):
+        if (ii >= 0) and (jj < nc):
             out[0] += alpha * cbeta * cgamma * volume[kk, ii, jj]
         #---bottom-right
         ii += 1
-        if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+        if (ii < nr) and (jj < nc):
             out[0] += calpha * cbeta * cgamma * volume[kk, ii, jj]
         #---bottom-left
         jj -= 1
-        if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+        if (ii < nr) and (jj >= 0):
             out[0] += calpha * beta * cgamma * volume[kk, ii, jj]
     return 1
 
@@ -675,42 +676,43 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
         out[2] = 0
     #---top-right
     jj += 1
-    if(jj < nc):
+    if (jj < nc) and (ii >= 0) and (kk >= 0):
         out[0] += alpha * cbeta * gamma * field[kk, ii, jj, 0]
         out[1] += alpha * cbeta * gamma * field[kk, ii, jj, 1]
         out[2] += alpha * cbeta * gamma * field[kk, ii, jj, 2]
     #---bottom-right
     ii += 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (jj < nc) and (ii < nr) and (kk >= 0):
         out[0] += calpha * cbeta * gamma * field[kk, ii, jj, 0]
         out[1] += calpha * cbeta * gamma * field[kk, ii, jj, 1]
         out[2] += calpha * cbeta * gamma * field[kk, ii, jj, 2]
     #---bottom-left
     jj -= 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if  (jj >= 0) and (ii < nr) and (kk >= 0):
         out[0] += calpha * beta * gamma * field[kk, ii, jj, 0]
         out[1] += calpha * beta * gamma * field[kk, ii, jj, 1]
         out[2] += calpha * beta * gamma * field[kk, ii, jj, 2]
     kk += 1
-    if(kk < ns):
+    if (kk < ns):
         ii -= 1
-        out[0] += alpha * beta * cgamma * field[kk, ii, jj, 0]
-        out[1] += alpha * beta * cgamma * field[kk, ii, jj, 1]
-        out[2] += alpha * beta * cgamma * field[kk, ii, jj, 2]
+        if (jj >= 0) and (ii >= 0):
+            out[0] += alpha * beta * cgamma * field[kk, ii, jj, 0]
+            out[1] += alpha * beta * cgamma * field[kk, ii, jj, 1]
+            out[2] += alpha * beta * cgamma * field[kk, ii, jj, 2]
         jj += 1
-        if(jj < nc):
+        if (jj < nc) and (ii >= 0):
             out[0] += alpha * cbeta * cgamma * field[kk, ii, jj, 0]
             out[1] += alpha * cbeta * cgamma * field[kk, ii, jj, 1]
             out[2] += alpha * cbeta * cgamma * field[kk, ii, jj, 2]
         #---bottom-right
         ii += 1
-        if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+        if (jj < nc) and (ii < nr):
             out[0] += calpha * cbeta * cgamma * field[kk, ii, jj, 0]
             out[1] += calpha * cbeta * cgamma * field[kk, ii, jj, 1]
             out[2] += calpha * cbeta * cgamma * field[kk, ii, jj, 2]
         #---bottom-left
         jj -= 1
-        if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+        if (jj >= 0) and (ii < nr):
             out[0] += calpha * beta * cgamma * field[kk, ii, jj, 0]
             out[1] += calpha * beta * cgamma * field[kk, ii, jj, 1]
             out[2] += calpha * beta * cgamma * field[kk, ii, jj, 2]
