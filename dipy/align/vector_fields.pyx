@@ -129,24 +129,25 @@ cdef inline int _interpolate_vector_2d(floating[:,:,:] field, double dii,
         cnp.npy_intp nc = field.shape[1]
         cnp.npy_intp ii, jj
         double alpha, beta, calpha, cbeta
-    if((dii < 0) or (djj < 0) or (dii > nr - 1) or (djj > nc - 1)):
+    if((dii <= -1) or (djj <= -1) or (dii >= nr) or (djj >= nc)):
         out[0] = 0
         out[1] = 0
         return 0
     #---top-left
     ii = <int>floor(dii)
     jj = <int>floor(djj)
-    if((ii < 0) or (jj < 0) or (ii >= nr) or (jj >= nc)):
-        out[0] = 0
-        out[1] = 0
-        return 0
+
     calpha = dii - ii
     cbeta = djj - jj
     alpha = 1 - calpha
     beta = 1 - cbeta
 
-    out[0] = alpha * beta * field[ii, jj, 0]
-    out[1] = alpha * beta * field[ii, jj, 1]
+    if (ii>=0) and (jj>=0):
+        out[0] = alpha * beta * field[ii, jj, 0]
+        out[1] = alpha * beta * field[ii, jj, 1]
+    else:
+        out[0] = 0
+        out[1] = 0
     #---top-right
     jj += 1
     if(jj < nc):
@@ -232,21 +233,22 @@ cdef inline int _interpolate_scalar_2d(floating[:,:] image, double dii,
         cnp.npy_intp nc = image.shape[1]
         cnp.npy_intp ii, jj
         double alpha, beta, calpha, cbeta
-    if((dii < 0) or (djj < 0) or (dii > nr - 1) or (djj > nc - 1)):
+    if((dii <= -1) or (djj <= -1) or (dii >= nr) or (djj >= nc)):
         out[0] = 0
         return 0
     #---top-left
     ii = <int>floor(dii)
     jj = <int>floor(djj)
-    if((ii < 0) or (jj < 0) or (ii >= nr) or (jj >= nc)):
-        out[0] = 0
-        return 0
+
     calpha = dii - ii
     cbeta = djj - jj
     alpha = 1 - calpha
     beta = 1 - cbeta
 
-    out[0] = alpha * beta * image[ii, jj]
+    if (ii>=0) and (jj>=0):
+        out[0] = alpha * beta * image[ii, jj]
+    else:
+        out[0] = alpha * beta * image[ii, jj]
     #---top-right
     jj += 1
     if(jj < nc):
@@ -528,7 +530,7 @@ cdef inline int _interpolate_scalar_3d(floating[:,:,:] volume,
         cnp.npy_intp nc = volume.shape[2]
         cnp.npy_intp kk, ii, jj
         double alpha, beta, calpha, cbeta, gamma, cgamma
-    if not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1):
+    if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
         out[0] = 0
         return 0
     # find the top left index and the interpolation coefficients
@@ -536,9 +538,7 @@ cdef inline int _interpolate_scalar_3d(floating[:,:,:] volume,
     ii = <int>floor(dii)
     jj = <int>floor(djj)
     # no one is affected
-    if not ((0 <= kk < ns) and (0 <= ii < nr) and (0 <= jj < nc)):
-        out[0] = 0
-        return 0
+
     cgamma = dkk - kk
     calpha = dii - ii
     cbeta = djj - jj
@@ -546,7 +546,10 @@ cdef inline int _interpolate_scalar_3d(floating[:,:,:] volume,
     beta = 1 - cbeta
     gamma = 1 - cgamma
     #---top-left
-    out[0] = alpha * beta * gamma * volume[kk, ii, jj]
+    if (ii>=0) and (jj>=0) and (kk>=0):
+        out[0] = alpha * beta * gamma * volume[kk, ii, jj]
+    else:
+        out[0] = 0
     #---top-right
     jj += 1
     if(jj < nc):
@@ -647,7 +650,7 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
         cnp.npy_intp nc = field.shape[2]
         cnp.npy_intp kk, ii, jj
         double alpha, beta, gamma, calpha, cbeta, cgamma
-    if not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1):
+    if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
         out[0] = 0
         out[1] = 0
         out[2] = 0
@@ -656,11 +659,7 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
     kk = <int>floor(dkk)
     ii = <int>floor(dii)
     jj = <int>floor(djj)
-    if not ((0 <= kk < ns) and (0 <= ii < nr) and (0 <= jj < nc)):
-        out[0] = 0
-        out[1] = 0
-        out[2] = 0
-        return 0
+
     cgamma = dkk - kk
     calpha = dii - ii
     cbeta = djj - jj
@@ -668,9 +667,14 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
     beta = 1 - cbeta
     gamma = 1 - cgamma
 
-    out[0] = alpha * beta * gamma * field[kk, ii, jj, 0]
-    out[1] = alpha * beta * gamma * field[kk, ii, jj, 1]
-    out[2] = alpha * beta * gamma * field[kk, ii, jj, 2]
+    if (ii>=0) and (jj>=0) and (kk>=0):
+        out[0] = alpha * beta * gamma * field[kk, ii, jj, 0]
+        out[1] = alpha * beta * gamma * field[kk, ii, jj, 1]
+        out[2] = alpha * beta * gamma * field[kk, ii, jj, 2]
+    else:
+        out[0] = 0
+        out[1] = 0
+        out[2] = 0
     #---top-right
     jj += 1
     if(jj < nc):
