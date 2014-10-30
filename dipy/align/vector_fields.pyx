@@ -129,6 +129,7 @@ cdef inline int _interpolate_vector_2d(floating[:,:,:] field, double dii,
         cnp.npy_intp nc = field.shape[1]
         cnp.npy_intp ii, jj
         double alpha, beta, calpha, cbeta
+        int inside
     if((dii <= -1) or (djj <= -1) or (dii >= nr) or (djj >= nc)):
         out[0] = 0
         out[1] = 0
@@ -142,9 +143,11 @@ cdef inline int _interpolate_vector_2d(floating[:,:,:] field, double dii,
     alpha = 1 - calpha
     beta = 1 - cbeta
 
+    inside = 0
     if (ii>=0) and (jj>=0):
         out[0] = alpha * beta * field[ii, jj, 0]
         out[1] = alpha * beta * field[ii, jj, 1]
+        inside += 1
     else:
         out[0] = 0
         out[1] = 0
@@ -153,17 +156,20 @@ cdef inline int _interpolate_vector_2d(floating[:,:,:] field, double dii,
     if (jj < nc) and (ii >= 0):
         out[0] += alpha * cbeta * field[ii, jj, 0]
         out[1] += alpha * cbeta * field[ii, jj, 1]
+        inside += 1
     #---bottom-right
     ii += 1
     if (jj < nc) and (ii < nr):
         out[0] += calpha * cbeta * field[ii, jj, 0]
         out[1] += calpha * cbeta * field[ii, jj, 1]
+        inside += 1
     #---bottom-left
     jj -= 1
     if (jj >= 0) and (ii < nr):
         out[0] += calpha * beta * field[ii, jj, 0]
         out[1] += calpha * beta * field[ii, jj, 1]
-    return 1
+        inside += 1
+    return 1 if inside==4 else 0
 
 
 def interpolate_scalar_2d(floating[:,:] image, double[:,:] locations):
@@ -232,6 +238,7 @@ cdef inline int _interpolate_scalar_2d(floating[:,:] image, double dii,
         cnp.npy_intp nr = image.shape[0]
         cnp.npy_intp nc = image.shape[1]
         cnp.npy_intp ii, jj
+        int inside
         double alpha, beta, calpha, cbeta
     if((dii <= -1) or (djj <= -1) or (dii >= nr) or (djj >= nc)):
         out[0] = 0
@@ -245,23 +252,28 @@ cdef inline int _interpolate_scalar_2d(floating[:,:] image, double dii,
     alpha = 1 - calpha
     beta = 1 - cbeta
 
+    inside = 0
     if (ii >= 0) and (jj >= 0):
         out[0] = alpha * beta * image[ii, jj]
+        inside += 1
     else:
-        out[0] = alpha * beta * image[ii, jj]
+        out[0] = 0
     #---top-right
     jj += 1
     if (jj < nc) and (ii >= 0):
         out[0] += alpha * cbeta * image[ii, jj]
+        inside += 1
     #---bottom-right
     ii += 1
     if (jj < nc) and (ii < nr):
         out[0] += calpha * cbeta * image[ii, jj]
+        inside += 1
     #---bottom-left
     jj -= 1
     if (jj >= 0) and (ii < nr):
         out[0] += calpha * beta * image[ii, jj]
-    return 1
+        inside += 1
+    return 1 if inside==4 else 0
 
 
 def interpolate_scalar_nn_2d(number[:,:] image, double[:,:] locations):
@@ -529,6 +541,7 @@ cdef inline int _interpolate_scalar_3d(floating[:,:,:] volume,
         cnp.npy_intp nr = volume.shape[1]
         cnp.npy_intp nc = volume.shape[2]
         cnp.npy_intp kk, ii, jj
+        int inside
         double alpha, beta, calpha, cbeta, gamma, cgamma
     if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
         out[0] = 0
@@ -545,40 +558,50 @@ cdef inline int _interpolate_scalar_3d(floating[:,:,:] volume,
     alpha = 1 - calpha
     beta = 1 - cbeta
     gamma = 1 - cgamma
+
+    inside = 0
     #---top-left
     if (ii >= 0) and (jj >= 0) and (kk >= 0):
         out[0] = alpha * beta * gamma * volume[kk, ii, jj]
+        inside += 1
     else:
         out[0] = 0
     #---top-right
     jj += 1
     if (ii >= 0) and (jj < nc) and (kk >= 0):
         out[0] += alpha * cbeta * gamma * volume[kk, ii, jj]
+        inside += 1
     #---bottom-right
     ii += 1
     if (ii < nr) and (jj < nc) and (kk >= 0):
         out[0] += calpha * cbeta * gamma * volume[kk, ii, jj]
+        inside += 1
     #---bottom-left
     jj -= 1
     if (ii  < nr) and (jj >= 0) and (kk >= 0):
         out[0] += calpha * beta * gamma * volume[kk, ii, jj]
+        inside += 1
     kk += 1
     if(kk < ns):
         ii -= 1
         if (ii >= 0) and (jj >= 0):
             out[0] += alpha * beta * cgamma * volume[kk, ii, jj]
+            inside += 1
         jj += 1
         if (ii >= 0) and (jj < nc):
             out[0] += alpha * cbeta * cgamma * volume[kk, ii, jj]
+            inside += 1
         #---bottom-right
         ii += 1
         if (ii < nr) and (jj < nc):
             out[0] += calpha * cbeta * cgamma * volume[kk, ii, jj]
+            inside += 1
         #---bottom-left
         jj -= 1
         if (ii < nr) and (jj >= 0):
             out[0] += calpha * beta * cgamma * volume[kk, ii, jj]
-    return 1
+            inside += 1
+    return 1 if inside==8 else 0
 
 
 def interpolate_vector_3d(floating[:,:,:,:] field, double[:,:] locations):
@@ -650,6 +673,7 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
         cnp.npy_intp nr = field.shape[1]
         cnp.npy_intp nc = field.shape[2]
         cnp.npy_intp kk, ii, jj
+        int inside
         double alpha, beta, gamma, calpha, cbeta, cgamma
     if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
         out[0] = 0
@@ -668,10 +692,12 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
     beta = 1 - cbeta
     gamma = 1 - cgamma
 
+    inside = 0
     if (ii>=0) and (jj>=0) and (kk>=0):
         out[0] = alpha * beta * gamma * field[kk, ii, jj, 0]
         out[1] = alpha * beta * gamma * field[kk, ii, jj, 1]
         out[2] = alpha * beta * gamma * field[kk, ii, jj, 2]
+        inside += 1
     else:
         out[0] = 0
         out[1] = 0
@@ -682,18 +708,21 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
         out[0] += alpha * cbeta * gamma * field[kk, ii, jj, 0]
         out[1] += alpha * cbeta * gamma * field[kk, ii, jj, 1]
         out[2] += alpha * cbeta * gamma * field[kk, ii, jj, 2]
+        inside += 1
     #---bottom-right
     ii += 1
     if (jj < nc) and (ii < nr) and (kk >= 0):
         out[0] += calpha * cbeta * gamma * field[kk, ii, jj, 0]
         out[1] += calpha * cbeta * gamma * field[kk, ii, jj, 1]
         out[2] += calpha * cbeta * gamma * field[kk, ii, jj, 2]
+        inside += 1
     #---bottom-left
     jj -= 1
     if  (jj >= 0) and (ii < nr) and (kk >= 0):
         out[0] += calpha * beta * gamma * field[kk, ii, jj, 0]
         out[1] += calpha * beta * gamma * field[kk, ii, jj, 1]
         out[2] += calpha * beta * gamma * field[kk, ii, jj, 2]
+        inside += 1
     kk += 1
     if (kk < ns):
         ii -= 1
@@ -701,24 +730,28 @@ cdef inline int _interpolate_vector_3d(floating[:,:,:,:] field,
             out[0] += alpha * beta * cgamma * field[kk, ii, jj, 0]
             out[1] += alpha * beta * cgamma * field[kk, ii, jj, 1]
             out[2] += alpha * beta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
         jj += 1
         if (jj < nc) and (ii >= 0):
             out[0] += alpha * cbeta * cgamma * field[kk, ii, jj, 0]
             out[1] += alpha * cbeta * cgamma * field[kk, ii, jj, 1]
             out[2] += alpha * cbeta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
         #---bottom-right
         ii += 1
         if (jj < nc) and (ii < nr):
             out[0] += calpha * cbeta * cgamma * field[kk, ii, jj, 0]
             out[1] += calpha * cbeta * cgamma * field[kk, ii, jj, 1]
             out[2] += calpha * cbeta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
         #---bottom-left
         jj -= 1
         if (jj >= 0) and (ii < nr):
             out[0] += calpha * beta * cgamma * field[kk, ii, jj, 0]
             out[1] += calpha * beta * cgamma * field[kk, ii, jj, 1]
             out[2] += calpha * beta * cgamma * field[kk, ii, jj, 2]
-    return 1
+            inside += 1
+    return 1 if inside==8 else 0
 
 
 cdef void _compose_vector_fields_2d(floating[:, :, :] d1, floating[:, :, :] d2,
@@ -841,6 +874,8 @@ cdef void _compose_vector_fields_2d(floating[:, :, :] d1, floating[:, :, :] d2,
                 cnt += 1
                 if(maxNorm < nn):
                     maxNorm = nn
+            else:
+                comp[i, j, :] = 0
     meanNorm /= cnt
     stats[0] = sqrt(maxNorm)
     stats[1] = sqrt(meanNorm)
@@ -1042,6 +1077,8 @@ cdef void _compose_vector_fields_3d(floating[:, :, :, :] d1,
                     cnt += 1
                     if(maxNorm < nn):
                         maxNorm = nn
+                else:
+                    comp[k, i, j, :] = 0
     meanNorm /= cnt
     stats[0] = sqrt(maxNorm)
     stats[1] = sqrt(meanNorm)
