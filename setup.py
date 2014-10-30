@@ -94,7 +94,8 @@ for modulename, other_sources, language in (
     pyx_src = pjoin(*modulename.split('.')) + '.pyx'
     EXTS.append(Extension(modulename, [pyx_src] + other_sources,
                           language=language,
-                          include_dirs=[np.get_include(), "src"]))
+                          include_dirs=[np.get_include(), "src"],
+                          extra_compile_args=["-msse2", "-mfpmath=sse"]))
 
 
 # Do our own build and install time dependency checking. setup.py gets called in
