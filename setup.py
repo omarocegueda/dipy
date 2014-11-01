@@ -124,7 +124,7 @@ else: # We have nibabel
     simple_test_c = """int main(int argc, char** argv) { return(0); }"""
     extbuilder = add_flag_checking(
         build_ext, [[['-fopenmp'], ['-fopenmp'], omp_test_c, 'HAVE_OPENMP'],
-                    [['/arch:SSE2'], [''], simple_test_c, 'USING_SSE2']])
+                    [['/arch:IA32'], [''], simple_test_c, 'USING_IA32']])
 
 # Installer that checks for install-time dependencies
 class installer(install.install):
