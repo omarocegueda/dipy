@@ -96,8 +96,7 @@ for modulename, other_sources, language in (
     pyx_src = pjoin(*modulename.split('.')) + '.pyx'
     EXTS.append(Extension(modulename, [pyx_src] + other_sources,
                           language=language,
-                          include_dirs=[np.get_include(), "src"],
-                          extra_compile_args=["-msse2", "-mfpmath=sse"]))
+                          include_dirs=[np.get_include(), "src"]))
 
 
 # Do our own build and install time dependency checking. setup.py gets called in
@@ -122,8 +121,10 @@ else: # We have nibabel
     # Add openmp flags if they work
     omp_test_c = """#include <omp.h>
     int main(int argc, char** argv) { return(0); }"""
+    simple_test_c = """int main(int argc, char** argv) { return(0); }"""
     extbuilder = add_flag_checking(
-        build_ext, [[['-fopenmp'], ['-fopenmp'], omp_test_c, 'HAVE_OPENMP']])
+        build_ext, [[['-fopenmp'], ['-fopenmp'], omp_test_c, 'HAVE_OPENMP'],
+                    [['/arch:SSE2'], [''], simple_test_c, 'USING_SSE2']])
 
 # Installer that checks for install-time dependencies
 class installer(install.install):
