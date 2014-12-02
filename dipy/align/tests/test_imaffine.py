@@ -136,8 +136,8 @@ def test_mattes():
     import mattes
     import matplotlib.pyplot as plt
     import imaffine
-    i10_nib = nib.load("../runs/reference/IBSR_10_ana_strip.nii.gz")
-    i15_nib = nib.load("../runs/target/IBSR_15_ana_strip.nii.gz")
+    i10_nib = nib.load("D:/opt/registration/runs/reference/IBSR_10_ana_strip.nii.gz")
+    i15_nib = nib.load("D:/opt/registration/runs/target/IBSR_15_ana_strip.nii.gz")
     i10 = i10_nib.get_data().squeeze()
     i10 = np.array(i10, dtype=np.float64)
     i10_aff = i10_nib.get_affine()
