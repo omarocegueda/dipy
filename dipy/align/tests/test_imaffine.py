@@ -156,7 +156,47 @@ def test_mattes():
     plt.figure()
     plt.imshow(pdf_reg)
 
+def test_cc_residuals():
+    import dipy.align.mattes as mattes
+    import experiments.registration.dataset_info as info
+    import experiments.registration.semi_synthetic as ss
+    import nibabel as nib
+    import dipy.viz.regtools as rt
 
+    I = np.array(range(10*15*20), dtype=np.float64).reshape(10, 15, 20)
+    J = 2*I+5
+    r = mattes.compute_cc_residuals(I, J, 3)
+    r = np.array(r)
+    
+    t1_name = info.get_brainweb('t1','strip')
+    t1_nib = nib.load(t1_name)
+    t1 = t1_nib.get_data().squeeze()
+    t1_n = t1.astype(np.float64)
+    t1_n = (t1_n - t1_n.min())/(t1_n.max() - t1_n.min())
+    
+    t2_name = info.get_brainweb('t2','strip')
+    t2_nib = nib.load(t2_name)
+    t2 = t2_nib.get_data().squeeze()
+    t2_n = t2.astype(np.float64)
+    t2_n = (t2_n - t2_n.min())/(t2_n.max() - t2_n.min())
+    
+    residuals = mattes.compute_cc_residuals_noboundary(t1_n, t2_n, 4)
+    residuals = np.array(residuals)
+    
+    means, vars = ss.get_mean_transfer(t1, t2)
+    sst2 = means[t1]
+    sst2 = (sst2 - sst2.min())/(sst2.max() - sst2.min())
+    
+    residuals_ss = mattes.compute_cc_residuals_noboundary(sst2, t2_n, 4)
+    residuals_ss = np.array(residuals_ss)
+    
+    
+    
+    
+    rr = mattes.compute_cc_residuals_noboundary(t1_n, t1_n, 4)
+    rr = np.array(rr)
+    
+    
 if __name__ == "__main__":
     test_aff_centers_of_mass_3d()
     test_aff_geometric_centers_3d()
