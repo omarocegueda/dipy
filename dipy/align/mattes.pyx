@@ -6,307 +6,151 @@
 import numpy as np
 cimport numpy as cnp
 cimport cython
+
+from dipy.align.vector_fields cimport(_apply_affine_3d_x0,
+                                      _apply_affine_3d_x1,
+                                      _apply_affine_3d_x2,
+                                      _apply_affine_2d_x0,
+                                      _apply_affine_2d_x1)
+
+from dipy.align.transforms cimport (jacobian_function, 
+                                    param_to_matrix_function,
+                                    get_jacobian_function)
+
 cdef extern from "dpy_math.h" nogil:
     double cos(double)
     double sin(double)
     double log(double)
 
-
-cdef inline double _apply_affine_3d_x0(double x0, double x1, double x2,
-                                       double h, double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, x2, h), returns the 1st element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, x2, h)
-    """
-    return aff[0, 0] * x0 + aff[0, 1] * x1 + aff[0, 2] * x2 + h*aff[0, 3]
-
-
-cdef inline double _apply_affine_3d_x1(double x0, double x1, double x2,
-                                       double h, double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, x2, h), returns the 2nd element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, x2, h)
-    """
-    return aff[1, 0] * x0 + aff[1, 1] * x1 + aff[1, 2] * x2 + h*aff[1, 3]
-
-
-cdef inline double _apply_affine_3d_x2(double x0, double x1, double x2,
-                                       double h, double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, x2, h), returns the 3d element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, x2, h)
-    """
-    return aff[2, 0] * x0 + aff[2, 1] * x1 + aff[2, 2] * x2 + h*aff[2, 3]
-
-
-cdef inline double _apply_affine_2d_x0(double x0, double x1, double h,
-                                       double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, h), returns the 1st element of product
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, h)
-    """
-    return aff[0, 0] * x0 + aff[0, 1] * x1 + h*aff[0, 2]
-
-
-cdef inline double _apply_affine_2d_x1(double x0, double x1, double h,
-                                       double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, h), returns the 2nd element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, h)
-    """
-    return aff[1, 0] * x0 + aff[1, 1] * x1 + h*aff[1, 2]
-
-
-ctypedef int (*jacobian_function)(double[:], double[:], double[:,:]) nogil
-r""" Type of a function that computes the Jacobian of a transform.
-Jacobian functions receive a vector containing the current parameters
-of the transformation, the coordinates of a point to compute the
-Jacobian at, and the Jacobian matrix to write the result in. The
-shape of the resulting Jacobian must be a dxn matrix, where d is the
-dimension of the transform, and n is the number of parameters of the
-transformation.
-
-If the Jacobian is CONSTANT along its domain, the corresponding
-jacobian_function must RETURN 1. Otherwise it must RETURN 0. This
-information is used by the optimizer to avoid making unnecessary
-function calls
-"""
-
-
-cdef inline void _mult_mat_3d(double[:,:] A, double[:,:] B, double[:,:] C) nogil:
-    r''' Multiplies two 3x3 matrices A, B and writes the product in C
-    '''
-    cdef:
-        cnp.npy_intp i, j
-
-    for i in range(3):
-        for j in range(3):
-            C[i, j] = A[i, 0]*B[0, j] + A[i, 1]*B[1, j] + A[i, 2]*B[2, j]
-
-
-cdef void _rotation_matrix_2d(double theta, double[:,:] R):
-    cdef:
-        double ct = cos(theta)
-        double st = sin(theta)
-    R[0,0], R[0,1] = ct, -st
-    R[1,0], R[1,1] = st, ct
-
-
-cdef void _rotation_matrix_3d(double a, double b, double c, double[:,:] R):
-    cdef:
-        double sa = sin(a)
-        double ca = cos(a)
-        double sb = sin(b)
-        double cb = cos(b)
-        double sc = sin(c)
-        double cc = cos(c)
-        double[:,:] rot_a = np.ndarray(shape=(3,3), dtype = np.float64)
-        double[:,:] rot_b = np.ndarray(shape=(3,3), dtype = np.float64)
-        double[:,:] rot_c = np.ndarray(shape=(3,3), dtype = np.float64)
-        double[:,:] temp = np.ndarray(shape=(3,3), dtype = np.float64)
-
-    with nogil:
-        rot_a[0,0], rot_a[0, 1], rot_a[0, 2] = 1.0, 0.0, 0.0
-        rot_a[1,0], rot_a[1, 1], rot_a[1, 2] = 0.0,  ca, -sa
-        rot_a[2,0], rot_a[2, 1], rot_a[2, 2] = 0.0,  sa,  ca
-
-        rot_b[0,0], rot_b[0, 1], rot_b[0, 2] =  cb, 0.0,  sb
-        rot_b[1,0], rot_b[1, 1], rot_b[1, 2] = 0.0, 1.0, 0.0
-        rot_b[2,0], rot_b[2, 1], rot_b[2, 2] = -sb, 0.0,  cb
-
-        rot_c[0,0], rot_c[0, 1], rot_c[0, 2] =  cc, -sc, 0.0
-        rot_c[1,0], rot_c[1, 1], rot_c[1, 2] =  sc,  cc, 0.0
-        rot_c[2,0], rot_c[2, 1], rot_c[2, 2] = 0.0, 0.0, 1.0
-
-        # Compute rot_c * rot_a * rot_b
-        _mult_mat_3d(rot_a, rot_b, temp)
-        _mult_mat_3d(rot_c, temp, R)
-
-
-cdef int _rotation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r''' Jacobian matrix of a 3D rotation transform with parameters theta, at x
-
-    T1[t] = x cost - y sint
-    T2[t] = x sint + y cost
-
-    dT1/dt = -x sint - y cost
-    dT2/dt = x cost - y sint
-    '''
-    cdef:
-        double st = sin(theta[0])
-        double ct = cos(theta[0])
-        double px = x[0], py = x[1]
-
-    J[0, 0] = -px * st - py * ct
-    J[1, 0] = px * ct - py * st
-    # This Jacobian depends on x (it's not constant): return 0
-    return 0
-
-
-cdef int _rotation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r''' Jacobian matrix of a 3D rotation transform with parameters theta, at x
-    '''
-    cdef:
-        double sa = sin(theta[0])
-        double ca = cos(theta[0])
-        double sb = sin(theta[1])
-        double cb = cos(theta[1])
-        double sc = sin(theta[2])
-        double cc = cos(theta[2])
-        double px = x[0], py = x[1], pz = x[2]
-
-
-    J[0, 0] = ( -sc * ca * sb ) * px + ( sc * sa ) * py + ( sc * ca * cb ) * pz
-    J[1, 0] = ( cc * ca * sb ) * px + ( -cc * sa ) * py + ( -cc * ca * cb ) * pz
-    J[2, 0] = ( sa * sb ) * px + ( ca ) * py + ( -sa * cb ) * pz
-
-    J[0, 1] = ( -cc * sb - sc * sa * cb ) * px + ( cc * cb - sc * sa * sb ) * pz
-    J[1, 1] = ( -sc * sb + cc * sa * cb ) * px + ( sc * cb + cc * sa * sb ) * pz
-    J[2, 1] = ( -ca * cb ) * px + ( -ca * sb ) * pz
-
-    J[0, 2] = ( -sc * cb - cc * sa * sb ) * px + ( -cc * ca ) * py + \
-              ( -sc * sb + cc * sa * cb ) * pz
-    J[1, 2] = ( cc * cb - sc * sa * sb ) * px + ( -sc * ca ) * py + \
-              ( cc * sb + sc * sa * cb ) * pz
-    J[2, 2] = 0
-    # This Jacobian depends on x (it's not constant): return 0
-    return 0
-
-
-cdef int _scale_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r""" Jacobian matrix of the isotropic 2D scale transform
-    The transformation is given by:
-
-    T(x) = (s*x0, s*x1)
-
-    The derivative w.r.t. s is T'(x) = [x0, x1]
-    """
-    J[0,0], J[1,0] = x[0], x[1]
-    # This Jacobian depends on x (it's not constant): return 0
-    return 0
-
-cdef int _scale_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r""" Jacobian matrix of the isotropic 3D scale transform
-    The transformation is given by:
-
-    T(x) = (s*x0, s*x1, s*x2)
-
-    The derivative w.r.t. s is T'(x) = [x0, x1, x2]
-    """
-    J[0,0], J[1,0], J[2,0]= x[0], x[1], x[3]
-    # This Jacobian depends on x (it's not constant): return 0
-    return 0
-
-
-cdef int _translation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r""" Jacobian matrix of the 2D translation transform
-    The transformation is given by:
-
-    T(x) = (T1(x), T2(x)) = (x0 + t0, x1 + t1)
-
-    The derivative w.r.t. t1 and t2 is given by
-
-    T'(x) = [[1, 0], # derivatives of [T1, T2] w.r.t. t0
-             [0, 1]] # derivatives of [T1, T2] w.r.t. t1
-    """
-    J[0,0], J[0, 1] = 1.0, 0.0
-    J[1,0], J[1, 1] = 0.0, 1.0
-    # This Jacobian does not depend on x (it's constant): return 1
-    return 1
-
-
-cdef int _translation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r""" Jacobian matrix of the 3D translation transform
-    The transformation is given by:
-
-    T(x) = (T1(x), T2(x), T3(x)) = (x0 + t0, x1 + t1, x2 + t2)
-
-    The derivative w.r.t. t1, t2 and t3 is given by
-
-    T'(x) = [[1, 0, 0], # derivatives of [T1, T2, T3] w.r.t. t0
-             [0, 1, 0], # derivatives of [T1, T2, T3] w.r.t. t1
-             [0, 0, 1]] # derivatives of [T1, T2, T3] w.r.t. t2
-    """
-    J[0,0], J[0,1], J[0,2] = 1.0, 0.0, 0.0
-    J[1,0], J[1,1], J[1,2] = 0.0, 1.0, 0.0
-    J[2,0], J[2,1], J[2,2] = 0.0, 0.0, 1.0
-    # This Jacobian does not depend on x (it's constant): return 1
-    return 1
-
-
-cdef int _affine_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r""" Jacobian matrix of the 2D affine transform
-    The transformation is given by:
-
-    T(x) = |a0, a1, a2 |   |x0|   | T1(x) |   |a0*x0 + a1*x1 + a2|
-           |a3, a4, a5 | * |x1| = | T2(x) | = |a3*x0 + a4*x1 + a5|
-                           | 1|
-
-    The derivatives w.r.t. each parameter are given by
-
-    T'(x) = [[x0,  0], #derivatives of [T1, T2] w.r.t a0
-             [x1,  0], #derivatives of [T1, T2] w.r.t a1
-             [ 1,  0], #derivatives of [T1, T2] w.r.t a2
-             [ 0, x0], #derivatives of [T1, T2] w.r.t a3
-             [ 0, x1], #derivatives of [T1, T2] w.r.t a4
-             [ 0,  1]] #derivatives of [T1, T2, T3] w.r.t a5
-
-    The Jacobian matrix is the transpose of the above matrix.
-    """
-    J[0,:] = 0
-    J[1,:] = 0
-
-    J[0, :2] = x[:]
-    J[0, 2] = 1
-    J[1, 3:5] = x[:]
-    J[1, 5] = 1
-    # This Jacobian depends on x (it's not constant): return 0
-    return 0
-
-
-cdef int _affine_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
-    r""" Jacobian matrix of the 3D affine transform
-    The transformation is given by:
-
-    T(x) = |a0, a1, a2,  a3 |   |x0|   | T1(x) |   |a0*x0 + a1*x1 + a2*x2 + a3|
-           |a4, a5, a6,  a7 | * |x1| = | T2(x) | = |a4*x0 + a5*x1 + a6*x2 + a7|
-           |a8, a9, a10, a11|   |x2|   | T3(x) |   |a8*x0 + a9*x1 + a10*x2+a11|
-                                | 1|
-
-    The derivatives w.r.t. each parameter are given by
-
-    T'(x) = [[x0,  0,  0], #derivatives of [T1, T2, T3] w.r.t a0
-             [x1,  0,  0], #derivatives of [T1, T2, T3] w.r.t a1
-             [x2,  0,  0], #derivatives of [T1, T2, T3] w.r.t a2
-             [ 1,  0,  0], #derivatives of [T1, T2, T3] w.r.t a3
-             [ 0, x0,  0], #derivatives of [T1, T2, T3] w.r.t a4
-             [ 0, x1,  0], #derivatives of [T1, T2, T3] w.r.t a5
-             [ 0, x2,  0], #derivatives of [T1, T2, T3] w.r.t a6
-             [ 0,  1,  0], #derivatives of [T1, T2, T3] w.r.t a7
-             [ 0,  0, x0], #derivatives of [T1, T2, T3] w.r.t a8
-             [ 0,  0, x1], #derivatives of [T1, T2, T3] w.r.t a9
-             [ 0,  0, x2], #derivatives of [T1, T2, T3] w.r.t a10
-             [ 0,  0,  1]] #derivatives of [T1, T2, T3] w.r.t a11
-
-    The Jacobian matrix is the transpose of the above matrix.
-    """
-    cdef:
-        cnp.npy_intp j
-
-    for j in range(3):
-        J[j,:] = 0
-    J[0, :3] = x[:]
-    J[0, 3] = 1
-    J[1, 4:7] = x[:]
-    J[1, 7] = 1
-    J[2, 8:11] = x[:]
-    J[2, 11] = 1
-    # This Jacobian depends on x (it's not constant): return 0
-    return 0
+class MattesBase(object):
+    def __init__(self, nbins, static, moving, smask=None, mmask=None, padding=2):
+        r""" MattesBase
+        Base class for the Mattes' Mutual Information metric
+
+        Parameters
+        ----------
+        nbins : int
+        static : array
+        moving : array
+        smask : array
+        mmask : array
+        padding : int
+
+        Notes: we need this class in cython to allow _joint_pdf_gradient_dense_2d
+        and _joint_pdf_gradient_dense_3d to receive a pointer to a nogil function
+        that computes the Jacobian of a transform, which allows us to compute
+        Jacobians inside a nogil loop.
+
+        The reason we need a class is to encapsulate all the parameters related to the
+        joint and marginal distributions.
+        """
+        self.nbins = nbins
+        self.padding = padding
+
+        if smask is None:
+            smask = np.array(static > 0).astype(np.int32)
+        if mmask is None:
+            mmask = np.array(moving > 0).astype(np.int32)
+
+        self.smin = np.min(static[smask!=0])
+        self.smax = np.max(static[smask!=0])
+        self.mmin = np.min(moving[mmask!=0])
+        self.mmax = np.max(moving[mmask!=0])
+
+        self.sdelta = (self.smax - self.smin)/(nbins - padding)
+        self.mdelta = (self.mmax - self.mmin)/(nbins - padding)
+        self.smin = self.smin/self.sdelta - padding
+        self.mmin = self.mmin/self.sdelta - padding
+
+        self.joint_grad = None
+        self.metric_grad = None
+        self.metric_val = 0
+        self.joint = np.ndarray(shape = (nbins, nbins), dtype = np.float64)
+        self.smarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
+        self.mmarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
+
+
+    def update_pdfs_dense(self, static, moving, smask, mmask):
+        dim = len(static.shape)
+        if dim == 2:
+            _compute_pdfs_dense_2d(static, moving, smask, mmask,
+                                   self.smin, self.sdelta, self.mmin, self.mdelta,
+                                   self.nbins, self.padding, self.joint, self.smarginal, self.mmarginal)
+        elif dim == 3:
+            _compute_pdfs_dense_3d(static, moving, smask, mmask,
+                                   self.smin, self.sdelta, self.mmin, self.mdelta,
+                                   self.nbins, self.padding, self.joint, self.smarginal, self.mmarginal)
+        else:
+            raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
+
+
+    def update_pdfs_sparse(self, sval, mval):
+        energy = _compute_pdfs_sparse(sval, mval, self.smin, self.sdelta,
+                                   self.nbins, self.mmin, self.mdelta, self.padding, self.joint, self.smarginal, self.mmarginal)
+
+
+    def update_gradient_dense(self, theta, transform, static, moving, grid_to_space, mgradient, smask, mmask):
+        cdef:
+            jacobian_function jacobian = NULL
+
+        dim = len(static.shape)
+        jacobian = get_jacobian_function(transform, dim)
+
+        if jacobian == NULL:
+            raise(ValueError('Unknown transform type: "'+transform+'"'))
+
+        if (self.joint_grad is None) or (self.joint_grad.shape[2] != theta.shape[0]):
+            self.joint_grad = np.ndarray(shape = (self.nbins, self.nbins, theta.shape[0]), dtype = np.float64)
+
+        if dim == 2:
+            _joint_pdf_gradient_dense_2d(theta, jacobian, static, moving, grid_to_space, mgradient,
+                                         smask, mmask, self.smin, self.sdelta, self.mmin, self.mdelta,
+                                         self.nbins, self.padding, self.joint_grad)
+        elif dim ==3:
+            _joint_pdf_gradient_dense_3d(theta, jacobian, static, moving, grid_to_space, mgradient,
+                                         smask, mmask, self.smin, self.sdelta, self.mmin, self.mdelta,
+                                         self.nbins, self.padding, self.joint_grad)
+        else:
+            raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
+
+
+    def update_gradient_sparse(self, dim, theta, transform, sval, mval, sample_points, mgradient):
+        cdef:
+            jacobian_function jacobian = NULL
+
+        dim = len(sample_points.shape[1])
+        jacobian = get_jacobian_function(transform, dim)
+
+        if jacobian == NULL:
+            raise(ValueError('Unknown transform type: "'+transform+'"'))
+
+        if (self.joint_grad is None) or (self.joint_grad.shape[2] != theta.shape[0]):
+            self.joint_grad = np.ndarray(shape = (self.nbins, self.nbins, theta.shape[0]), dtype = np.float64)
+
+        if dim == 2:
+            _joint_pdf_gradient_sparse_2d(theta, jacobian, sval, mval, sample_points, mgradient,
+                                          self.smin, self.sdelta, self.mmin, self.mdelta,
+                                          self.nbins, self.padding, self.joint_grad)
+        elif dim ==3:
+            _joint_pdf_gradient_sparse_3d(theta, jacobian, sval, mval, sample_points, mgradient,
+                                          self.smin, self.sdelta, self.mmin, self.mdelta,
+                                          self.nbins, self.padding, self.joint_grad)
+        else:
+            raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
+
+
+    def update_mi_metric(self, update_gradient=True):
+        if update_gradient:
+            grad_dimension = self.joint_grad.shape[2]
+            if (self.metric_grad is None) or (self.metric_grad.shape[0] != grad_dimension):
+                self.metric_grad = np.empty(shape=grad_dimension)
+            self.metric_val = _compute_mattes_mi(self.joint, self.joint_grad,
+                                                 self.smarginal, self.mmarginal,
+                                                 self.metric_grad)
+        else:
+            self.metric_val = _compute_mattes_mi(self.joint, self.joint_grad,
+                                                 self.smarginal, self.mmarginal,
+                                                 None)
 
 
 cdef inline double _bin_normalize(double x, double mval, double delta) nogil:
@@ -726,7 +570,7 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
                     continue
                 if mmask is not None and mmask[i, j] == 0:
                     continue
-                
+
                 valid_points += 1
                 x[0] = _apply_affine_2d_x0(i, j, 1, grid_to_space)
                 x[1] = _apply_affine_2d_x1(i, j, 1, grid_to_space)
@@ -755,7 +599,7 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
                 for j in range(nbins):
                     for k in range(n):
                         grad_pdf[i, j, k] /= (valid_points * mdelta)
-                    
+
 
 
 cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
@@ -1019,218 +863,6 @@ cdef _joint_pdf_gradient_sparse_3d(double[:] theta, jacobian_function jacobian,
                 spline_arg += 1.0
 
 
-
-
-
-def joint_pdf_dense_3d(static, moving, int nbins):
-    r''' Joint Probability Density Function
-    Computes the Joint Probability Density Function (PDF) of intensity levels
-    of the given images (assuming they're aligned) as a squared histogram of
-    [nbins x nbins] bins.
-
-    Parameters
-    ----------
-    static : array, shape (S, R, C)
-        Static image
-    moving :  array, shape (S, R, C)
-        Moving image
-    '''
-    cdef:
-        int padding = 2
-        double smin, smax, mmin, mmax
-        double sdelta, mdelta
-
-    smask = np.array(static > 0).astype(np.int32)
-    mmask = np.array(moving > 0).astype(np.int32)
-
-    smin = np.min(static[static>0])
-    smax = np.max(static[static>0])
-    mmin = np.min(moving[moving>0])
-    mmax = np.max(moving[moving>0])
-
-    sdelta = (smax - smin)/(nbins - 2 * padding)
-    mdelta = (mmax - mmin)/(nbins - 2 * padding)
-    smin = smin/sdelta - padding
-    mmin = mmin/sdelta - padding
-
-    joint = np.ndarray(shape = (nbins, nbins), dtype = np.float64)
-    smarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
-    mmarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
-    energy = _compute_pdfs_dense_3d(static, moving, smask, mmask,
-                                 smin, sdelta, mmin, mdelta,
-                                 nbins, padding, joint, smarginal, mmarginal)
-    return joint
-
-
-cdef inline int _int_max(int a, int b) nogil:
-    r"""
-    Returns the maximum of a and b
-    """
-    return a if a >= b else b
-
-
-cdef inline int _int_min(int a, int b) nogil:
-    r"""
-    Returns the minimum of a and b
-    """
-    return a if a <= b else b
-
-cdef enum:
-    SI = 0
-    SI2 = 1
-    SJ = 2
-    SJ2 = 3
-    SIJ = 4
-    CNT = 5
-
-def compute_cc_residuals(double[:,:,:] I, double[:,:,:] J, int radius):
-    cdef:
-        int ns = I.shape[0]
-        int nr = I.shape[1]
-        int nc = I.shape[2]
-        double s1, s2, wx, p, t
-        int i, j, k, s, r, c
-        int start_k, end_k, start_i, end_i, start_j, end_j
-
-        double[:,:,:] residuals = np.zeros((ns, nr, nc))
-
-    with nogil:
-        for s in range(ns):
-            for r in range(nr):
-                for c in range(nc):
-
-                    #Affine fit
-                    s1 = 0
-                    s2 = 0
-                    wx = 0
-                    p = 0
-                    t = 0
-                    start_k = _int_max(0, s - radius)
-                    end_k = _int_min(ns, 1 + s + radius)
-                    for k in range(start_k, end_k):
-
-                        start_i = _int_max(0, r - radius)
-                        end_i = _int_min(nr, 1 + r + radius)
-                        for i in range(start_i, end_i):
-
-                            start_j = _int_max(0, c - radius)
-                            end_j = _int_min(nc, 1 + c + radius)
-                            for j in range(start_j, end_j):
-
-                                s1 += I[k, i, j]
-                                s2 += I[k, i, j] * I[k, i, j]
-                                wx += 1
-                                p += I[k, i, j] * J[k, i, j]
-                                t += J[k, i, j]
-
-                    if s2 < 1e-9:
-                        alpha = 0
-                        beta = t/wx
-                    else:
-                        beta = (t - (s1 * p) / s2) / (wx - (s1 * s1) / s2)
-                        alpha = (p - beta * s1) / s2
-
-                    #Compute residuals
-                    residuals[s, r, c] = 0
-                    start_k = _int_max(0, s - radius)
-                    end_k = _int_min(ns, 1 + s + radius)
-                    for k in range(start_k, end_k):
-
-                        start_i = _int_max(0, r - radius)
-                        end_i = _int_min(nr, 1 + r + radius)
-                        for i in range(start_i, end_i):
-
-                            start_j = _int_max(0, c - radius)
-                            end_j = _int_min(nc, 1 + c + radius)
-                            for j in range(start_j, end_j):
-
-                                residuals[s, r, c] += ((alpha * I[k, i, j] + beta) - J[k, i, j]) ** 2
-    return residuals
-
-
-def compute_cc_residuals_noboundary(double[:,:,:] I, double[:,:,:] J, int radius):
-    cdef:
-        int ns = I.shape[0]
-        int nr = I.shape[1]
-        int nc = I.shape[2]
-        double s1, s2, wx, p, t, ave, worst
-        int i, j, k, s, r, c, intersect
-        int start_k, end_k, start_i, end_i, start_j, end_j
-
-        double[:,:,:] residuals = np.zeros((ns, nr, nc))
-
-    with nogil:
-        for s in range(ns):
-            for r in range(nr):
-                for c in range(nc):
-
-                    #Affine fit
-                    s1 = 0
-                    s2 = 0
-                    wx = 0
-                    p = 0
-                    t = 0
-                    start_k = _int_max(0, s - radius)
-                    end_k = _int_min(ns, 1 + s + radius)
-                    for k in range(start_k, end_k):
-
-                        start_i = _int_max(0, r - radius)
-                        end_i = _int_min(nr, 1 + r + radius)
-                        for i in range(start_i, end_i):
-
-                            start_j = _int_max(0, c - radius)
-                            end_j = _int_min(nc, 1 + c + radius)
-                            for j in range(start_j, end_j):
-
-                                intersect = (I[k, i, j]>0) * (J[k, i, j]>0)
-                                if intersect == 0:
-                                    continue
-                                s1 += I[k, i, j]
-                                s2 += I[k, i, j] * I[k, i, j]
-                                wx += 1
-                                p += I[k, i, j] * J[k, i, j]
-                                t += J[k, i, j]
-
-                    residuals[s, r, c] = 0
-                    if wx<3:
-                        continue
-                    ave = t/wx
-
-                    if s2 < 1e-6:
-                        alpha = 0
-                        beta = ave
-                    else:
-                        if s2 * wx - (s1 * s1) < 1e-6 and s2 * wx - (s1 * s1)  > -1e-6:
-                            continue
-                        beta = (t - (s1 * p) / s2) / (wx - (s1 * s1) / s2)
-                        alpha = (p - beta * s1) / s2
-
-                    #Compute residuals
-                    worst = 0
-                    start_k = _int_max(0, s - radius)
-                    end_k = _int_min(ns, 1 + s + radius)
-                    for k in range(start_k, end_k):
-
-                        start_i = _int_max(0, r - radius)
-                        end_i = _int_min(nr, 1 + r + radius)
-                        for i in range(start_i, end_i):
-
-                            start_j = _int_max(0, c - radius)
-                            end_j = _int_min(nc, 1 + c + radius)
-                            for j in range(start_j, end_j):
-
-                                intersect = (I[k, i, j]>0) * (J[k, i, j]>0)
-                                if intersect == 0:
-                                    continue
-
-                                worst += (ave - J[k, i, j]) ** 2
-                                residuals[s, r, c] += ((alpha * I[k, i, j] + beta) - J[k, i, j]) ** 2
-                    if residuals[s, r, c] > worst:
-                        residuals[s, r, c] = worst
-
-    return residuals
-
-
 cdef double _compute_mattes_mi(double[:,:] joint, double[:,:,:] joint_gradient,
                                double[:] smarginal, double[:] mmarginal,
                                double[:] mi_gradient) nogil:
@@ -1261,171 +893,3 @@ cdef double _compute_mattes_mi(double[:,:] joint, double[:,:,:] joint_gradient,
 
 
 
-
-
-
-
-class MattesPDF(object):
-
-    def __init__(self, nbins, static, moving, smask=None, mmask=None, padding=2):
-        self.nbins = nbins
-        self.padding = padding
-
-        if smask is None:
-            smask = np.array(static > 0).astype(np.int32)
-        if mmask is None:
-            mmask = np.array(moving > 0).astype(np.int32)
-
-        self.smin = np.min(static[smask!=0])
-        self.smax = np.max(static[smask!=0])
-        self.mmin = np.min(moving[mmask!=0])
-        self.mmax = np.max(moving[mmask!=0])
-
-        self.sdelta = (self.smax - self.smin)/(nbins - padding)
-        self.mdelta = (self.mmax - self.mmin)/(nbins - padding)
-        self.smin = self.smin/self.sdelta - padding
-        self.mmin = self.mmin/self.sdelta - padding
-
-        self.joint_grad = None
-        self.metric_grad = None
-        self.metric_val = 0
-        self.joint = np.ndarray(shape = (nbins, nbins), dtype = np.float64)
-        self.smarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
-        self.mmarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
-
-
-    def update_pdfs_dense(self, static, moving, smask, mmask):
-        dim = len(static.shape)
-        if dim == 2:
-            _compute_pdfs_dense_2d(static, moving, smask, mmask,
-                                   self.smin, self.sdelta, self.mmin, self.mdelta,
-                                   self.nbins, self.padding, self.joint, self.smarginal, self.mmarginal)
-        elif dim == 3:
-            _compute_pdfs_dense_3d(static, moving, smask, mmask,
-                                   self.smin, self.sdelta, self.mmin, self.mdelta,
-                                   self.nbins, self.padding, self.joint, self.smarginal, self.mmarginal)
-        else:
-            raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
-
-
-    def update_pdfs_sparse(self, sval, mval):
-        energy = _compute_pdfs_sparse(sval, mval, self.smin, self.sdelta,
-                                   self.nbins, self.mmin, self.mdelta, self.padding, self.joint, self.smarginal, self.mmarginal)
-
-
-    def update_gradient_dense(self, theta, transform, static, moving, grid_to_space, mgradient, smask, mmask):
-        dim = len(static.shape)
-        if (self.joint_grad is None) or (self.joint_grad.shape[2] != theta.shape[0]):
-            self.joint_grad = np.ndarray(shape = (self.nbins, self.nbins, theta.shape[0]), dtype = np.float64)
-        if transform == 'translation':
-            if dim == 2:
-                jacobian = _translation_jacobian_2d
-            else:
-                jacobian = _translation_jacobian_3d
-        elif transform == 'scale':
-            if dim == 2:
-                jacobian = _scale_jacobian_2d
-            else:
-                jacobian = _scale_jacobian_3d
-        elif transform == 'rotation':
-            if dim == 2:
-                jacobian = _rotation_jacobian_2d
-            else:
-                jacobian = _rotation_jacobian_3d
-        elif transform == 'affine':
-            if dim == 2:
-                jacobian = _affine_jacobian_2d
-            else:
-                jacobian = _affine_jacobian_3d
-        else:
-            raise(ValueError('Unknown transform type: "'+transform+'"'))
-
-        if dim == 2:
-            _joint_pdf_gradient_dense_2d(theta, jacobian, static, moving, grid_to_space, mgradient,
-                                         smask, mmask, self.smin, self.sdelta, self.mmin, self.mdelta,
-                                         self.nbins, self.padding, self.joint_grad)
-        elif dim ==3:
-            _joint_pdf_gradient_dense_3d(theta, jacobian, static, moving, grid_to_space, mgradient,
-                                         smask, mmask, self.smin, self.sdelta, self.mmin, self.mdelta,
-                                         self.nbins, self.padding, self.joint_grad)
-        else:
-            raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
-
-
-    def update_gradient_sparse(self, dim, theta, transform, sval, mval, sample_points, mgradient):
-        dim = sample_points.shape[1]
-        if (self.joint_grad is None) or (self.joint_grad.shape[2] != theta.shape[0]):
-            self.joint_grad = np.ndarray(shape = (self.nbins, self.nbins, theta.shape[0]), dtype = np.float64)
-        if transform == 'translation':
-            if dim == 2:
-                jacobian = _translation_jacobian_2d
-            else:
-                jacobian = _translation_jacobian_3d
-        elif transform == 'scale':
-            if dim == 2:
-                jacobian = _scale_jacobian_2d
-            else:
-                jacobian = _scale_jacobian_3d
-        elif transform == 'rotation':
-            if dim == 2:
-                jacobian = _rotation_jacobian_2d
-            else:
-                jacobian = _rotation_jacobian_3d
-        elif transform == 'affine':
-            if dim == 2:
-                jacobian = _affine_jacobian_2d
-            else:
-                jacobian = _affine_jacobian_3d
-        else:
-            raise(ValueError('Unknown transform type: "'+transform+'"'))
-
-        if dim == 2:
-            _joint_pdf_gradient_sparse_2d(theta, jacobian, sval, mval, sample_points, mgradient,
-                                          self.smin, self.sdelta, self.mmin, self.mdelta,
-                                          self.nbins, self.padding, self.joint_grad)
-        elif dim ==3:
-            _joint_pdf_gradient_sparse_3d(theta, jacobian, sval, mval, sample_points, mgradient,
-                                          self.smin, self.sdelta, self.mmin, self.mdelta,
-                                          self.nbins, self.padding, self.joint_grad)
-        else:
-            raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
-
-
-    def update_mi_metric(self, update_gradient=True):
-        if update_gradient:
-            grad_dimension = self.joint_grad.shape[2]
-            if (self.metric_grad is None) or (self.metric_grad.shape[0] != grad_dimension):
-                self.metric_grad = np.empty(shape=grad_dimension)
-            self.metric_val = _compute_mattes_mi(self.joint, self.joint_grad,
-                                                 self.smarginal, self.mmarginal,
-                                                 self.metric_grad)
-        else:
-            self.metric_val = _compute_mattes_mi(self.joint, self.joint_grad,
-                                                 self.smarginal, self.mmarginal,
-                                                 None)
-
-
-
-
-
-
-
-
-
-
-
-cdef eval_jacobian(double[:]theta, double[:]x, double[:,:] J, jacobian_function jacobian):
-    jacobian(theta, x, J)
-
-def test_evals():
-    cdef:
-        double[:,:] Jscale = np.ndarray(shape = (12,3), dtype=np.float64)
-        double[:] theta = np.ndarray(shape = (1, ), dtype=np.float64)
-        double[:] x = np.ndarray(shape = (3, ), dtype=np.float64)
-
-    theta[0] = 5.5
-    x[0] = 1.5
-    x[1] = 2.0
-    x[2] = 2.5
-    eval_jacobian(theta, x, Jscale, _scale_jacobian_3d)
-    print(np.array(Jscale))
