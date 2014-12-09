@@ -6,7 +6,10 @@
 import numpy as np
 cimport numpy as cnp
 cimport cython
-from libc.math cimport cos, sin
+cdef extern from "dpy_math.h" nogil:
+    double cos(double)
+    double sin(double)
+    double log(double)
 
 
 cdef inline double _apply_affine_3d_x0(double x0, double x1, double x2,
@@ -706,7 +709,7 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
         int nrows = static.shape[0]
         int ncols = static.shape[1]
         int n = theta.shape[0]
-        int offset, constant_jacobian=0
+        int offset, valid_points, constant_jacobian=0
         cnp.npy_intp k, i, j, r, c
         double rn, cn
         double val, spline_arg
@@ -716,13 +719,15 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
 
     grad_pdf[...] = 0
     with nogil:
-
+        valid_points = 0
         for i in range(nrows):
             for j in range(ncols):
                 if smask is not None and smask[i, j] == 0:
                     continue
                 if mmask is not None and mmask[i, j] == 0:
                     continue
+                
+                valid_points += 1
                 x[0] = _apply_affine_2d_x0(i, j, 1, grid_to_space)
                 x[1] = _apply_affine_2d_x1(i, j, 1, grid_to_space)
 
@@ -744,6 +749,13 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
                     for k in range(n):
                         grad_pdf[r, c + offset,k] -= val * prod[k]
                     spline_arg += 1.0
+
+        if valid_points * mdelta > 0:
+            for i in range(nbins):
+                for j in range(nbins):
+                    for k in range(n):
+                        grad_pdf[i, j, k] /= (valid_points * mdelta)
+                    
 
 
 cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
@@ -1219,7 +1231,33 @@ def compute_cc_residuals_noboundary(double[:,:,:] I, double[:,:,:] J, int radius
     return residuals
 
 
+cdef double _compute_mattes_mi(double[:,:] joint, double[:,:,:] joint_gradient,
+                               double[:] smarginal, double[:] mmarginal,
+                               double[:] mi_gradient) nogil:
+    cdef:
+        double epsilon = 2.2204460492503131e-016
+        double metric_value
+        int nrows = joint_gradient.shape[0]
+        int ncols = joint_gradient.shape[1]
+        int n = joint_gradient.shape[2]
 
+    mi_gradient[:] = 0
+    metric_value = 0
+    for i in range(nrows):
+        for j in range(ncols):
+            if mmarginal[j] < epsilon:
+                continue
+
+            factor = log(joint[i,j] / mmarginal[j])
+
+            if mi_gradient is not None:
+                for k in range(n):
+                    mi_gradient[k] -= joint_gradient[i, j, k] * factor
+
+            if smarginal[i] > epsilon:
+                metric_value += joint[i,j] * (factor - log(smarginal[i]))
+
+    return metric_value
 
 
 
@@ -1249,10 +1287,12 @@ class MattesPDF(object):
         self.mmin = self.mmin/self.sdelta - padding
 
         self.joint_grad = None
+        self.metric_grad = None
+        self.metric_val = 0
         self.joint = np.ndarray(shape = (nbins, nbins), dtype = np.float64)
         self.smarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
         self.mmarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
-        #self.update_pdf_dense(static, moving, smask, mmask)
+
 
     def update_pdfs_dense(self, static, moving, smask, mmask):
         dim = len(static.shape)
@@ -1351,9 +1391,18 @@ class MattesPDF(object):
             raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
 
 
-
-
-
+    def update_mi_metric(self, update_gradient=True):
+        if update_gradient:
+            grad_dimension = self.joint_grad.shape[2]
+            if (self.metric_grad is None) or (self.metric_grad.shape[0] != grad_dimension):
+                self.metric_grad = np.empty(shape=grad_dimension)
+            self.metric_val = _compute_mattes_mi(self.joint, self.joint_grad,
+                                                 self.smarginal, self.mmarginal,
+                                                 self.metric_grad)
+        else:
+            self.metric_val = _compute_mattes_mi(self.joint, self.joint_grad,
+                                                 self.smarginal, self.mmarginal,
+                                                 None)
 
 
 
