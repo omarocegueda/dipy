@@ -156,7 +156,7 @@ def test_mattes():
     plt.figure()
     plt.imshow(pdf_reg)
 
-def test_cc_residuals():
+def _test_cc_residuals():
     import dipy.align.mattes as mattes
     import experiments.registration.dataset_info as info
     import experiments.registration.semi_synthetic as ss
@@ -196,7 +196,56 @@ def test_cc_residuals():
     rr = mattes.compute_cc_residuals_noboundary(t1_n, t1_n, 4)
     rr = np.array(rr)
     
-    
+def align_mattes_mi():
+    import experiments.registration.dataset_info as info
+    import nibabel as nib
+    import dipy.align.mattes as mattes
+    import scipy as sp
+    from dipy.align.transforms import transform_type
+    from dipy.align.imaffine import *
+    import dipy.viz.regtools as rt
+    i1_name = info.get_ibsr(1, 'strip')
+    i2_name = info.get_ibsr(2, 'strip')
+    i1_nib = nib.load(i1_name)
+    i2_nib = nib.load(i2_name)
+    i1_vol = i1_nib.get_data().squeeze()
+    i2_vol = i2_nib.get_data().squeeze()
+    i1_aff = i1_nib.get_affine()
+    i2_aff = i2_nib.get_affine()
+
+    #Acquire static and moving images
+    dim = 2
+    static = i1_vol[:, 64, :].transpose()[::-1, ::-1].astype(np.float64)
+    static_aff = np.eye(1+dim)
+    smask = (static>0).astype(np.int32)
+
+    use_synthetic_affine = True
+    if use_synthetic_affine:
+        gt_aff = np.array([[1, 0, -0.7], [0, 1, 0.7], [0, 0, 1]])
+        moving = aff_warp(static, static_aff, static, static_aff, gt_aff).astype(np.float64)
+        moving_aff = np.eye(1+dim)
+    else:
+        moving = i2_vol[:, 64, :].transpose()[::-1, ::-1].astype(np.float64)
+        moving_aff = np.eye(1+dim)
+
+    #Warp moving image to the common reference
+    warped = aff_warp(static, static_aff, moving, moving_aff, np.eye(1+dim)).astype(np.float64)
+    wmask = (warped>0).astype(np.int32)
+
+    #Gradient of the warped image
+    grad_w = np.empty(shape=(warped.shape)+(dim,))
+    for i, grad in enumerate(sp.gradient(moving)):
+        grad_w[..., i] = grad
+
+    #Initialize distribution estimation
+    M = mattes.MattesBase(32, static, warped)
+
+    theta = np.array([0.0, 0.0])
+    M.update_pdfs_dense(static, warped, smask, wmask)
+    M.update_gradient_dense(theta, transform_type['TRANSLATION'], static, warped, static_aff, grad_w, smask, wmask)
+    M.update_mi_metric(True)
+
+
 if __name__ == "__main__":
     test_aff_centers_of_mass_3d()
     test_aff_geometric_centers_3d()

@@ -2,40 +2,78 @@ import numpy as np
 import scipy.ndimage as ndimage
 from dipy.align import floating
 import dipy.align.vector_fields as vf
+from dipy.align.mattes import MattesBase
 
-#The metric needs to warp the volumes given a parameter vector,
-#so, given the parameter vector, we need to generate the 
-#corresponding matrix.
-_numer_of_params_2d = {'translation':2, 'rotation':1, 'scale':1, 'affine':6}
-_numer_of_params_3d = {'translation':3, 'rotation':3, 'scale':1, 'affine':12}
-
-def get_number_of_parameters(dim, transform):
-    if dim == 2:
-        return _numer_of_params_2d[transform]
-    elif dim == 3:
-        return _numer_of_params_3d[transform]
-    else:
-        raise ValueError('Unknown '+str(dim)+'-D transform: '+transform)
+class MattesMIMetric(MattesBase):
+    def __init__():
+        pass
 
 
-def get_transform_affine(dim, transform, parameters):
-    if dim == 2:
-        if transform == 'rotation':
-            return mattes._rotation_matrix_2d, _rotation_jacobian_2d
-        elif transform == 'scale':
-            return _scale_jacobian_2d
-    elif dim == 3:
-        if transform == 'rotation':
-            return mattes._rotation_matrix_3d, _rotation_jacobian_3d
-        elif transform == 'scale':
-            return _scale_jacobian_3d
-    
+class AffineRegistration(object):
+    def __init__(self, metric=None, x0="rigid", method='L-BFGS-B',
+                 bounds=None, verbose=False, options=None,
+                 evolution=False):
+
+        self.metric = metric
+
+        if self.metric is None:
+            self.metric = MattesMIMetric()
+
+        self.verbose = verbose
+        self.method = method
+        if self.method not in ['CG']:
+            raise ValueError('Only Conjugate Gradient can be used')
+        self.bounds = bounds
+        self.options = options
+        self.evolution = evolution
 
 
+    def optimize(self, static, moving, transform, x0, static_affine=None, moving_affine=None,
+                 prealign=None):
+        r'''
+        Parameters
+        ----------
+        transform:
 
+        prealign: string, or matrix, or None
+            If string:
+                'mass': align centers of gravity
+                'origins': align physical coordinates of voxel (0,0,0)
+                'centers': align physical coordinates of central voxels
+            If matrix:
+                array, shape (dim+1, dim+1)
+            If None:
+                Start from identity
+        '''
+        self.dim = len(static.shape)
+        if dim == 2:
+            nparam = {'translation':2, 'rotation':1, 'iso':1, 'aniso':2, 'affine':6}
+        elif dim == 3:
+            nparam = {'translation':3, 'rotation':3, 'iso':1, 'aniso':3, 'affine':12}
+        else:
+            raise ValueError('Unsuported image dimension: '+str(dim))
 
+        self.nparam = nparam
+        #Assume that zero parameter vector maps to identity
+        if x0 is None:
+            x0 = np.zeros(self.nparam)
+        if prealign is None:
+            prealign = np.eye(dim + 1)
+        elif prealign == 'mass':
+            prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
+        elif prealign == 'origins':
+            prealign = aff_origins(static, static_affine, moving, moving_affine)
+        elif prealign == 'centers':
+            prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
 
+        self.metric.setup(prealign)#Provide the pre-align matrix. The metric must store it
+        distance_method = self.metric.distance
+        gradient_method = self.metric.gradient
 
+        opt = Optimizer(gradient_method, x0, method=self.method,
+                        options=self.options, evolution=self.evolution)
+        if self.verbose:
+            opt.print_summary()
 
 
 def aff_warp(static, static_affine, moving, moving_affine, transform):
@@ -165,145 +203,3 @@ def aff_origins(static, static_affine, moving, moving_affine):
     transform = np.eye(dim + 1)
     transform[:dim,dim] = (c_moving - c_static)[:dim]
     return transform
-
-
-class MattesMIMetric():
-    def __init__():
-        pass
-
-
-class AffineRegistration(object):
-    def __init__(self, metric=None, x0="rigid", method='L-BFGS-B',
-                 bounds=None, verbose=False, options=None,
-                 evolution=False):
-
-        self.metric = metric
-        
-        if self.metric is None:
-            self.metric = MattesMIMetric()
-        
-        self.verbose = verbose
-        self.method = method
-        if self.method not in ['CG']:
-            raise ValueError('Only Conjugate Gradient can be used')
-        self.bounds = bounds
-        self.options = options
-        self.evolution = evolution
-
-
-    def optimize(self, static, moving, transform, x0, static_affine=None, moving_affine=None, 
-                 prealign=None):
-        r'''
-        Parameters
-        ----------
-        transform:
-            
-        prealign: string, or matrix, or None
-            If string:
-                'mass': align centers of gravity
-                'origins': align physical coordinates of voxel (0,0,0)
-                'centers': align physical coordinates of central voxels
-            If matrix:
-                array, shape (dim+1, dim+1)
-            If None:
-                Start from identity
-        '''
-        self.dim = len(static.shape)
-        if dim == 2:
-            nparam = {'translation':2, 'rotation':1, 'iso':1, 'aniso':2, 'affine':6}
-        elif dim == 3:
-            nparam = {'translation':3, 'rotation':3, 'iso':1, 'aniso':3, 'affine':12}
-        else:
-            raise ValueError('Unsuported image dimension: '+str(dim))
-        
-        self.nparam = nparam
-        #Assume that zero parameter vector maps to identity
-        if x0 is None:
-            x0 = np.zeros(self.nparam)
-        if prealign is None:
-            prealign = np.eye(dim + 1)
-        elif prealign == 'mass':
-            prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
-        elif prealign == 'origins':
-            prealign = aff_origins(static, static_affine, moving, moving_affine)
-        elif prealign == 'centers':
-            prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
-        
-        self.metric.setup(prealign)#Provide the pre-align matrix. The metric must store it
-        distance_method = self.metric.distance
-        gradient_method = self.metric.gradient
-        
-        opt = Optimizer(gradient_method, x0, method=self.method,
-                        options=self.options, evolution=self.evolution)
-        if self.verbose:
-            opt.print_summary()
-
-    
-def align_mattes_mi():
-    import experiments.registration.dataset_info as info
-    import nibabel as nib
-    import dipy.align.mattes as mattes
-    import scipy as sp
-    i1_name = info.get_ibsr(1, 'strip')
-    i2_name = info.get_ibsr(2, 'strip')
-    i1_nib = nib.load(i1_name)
-    i2_nib = nib.load(i2_name)
-    i1_vol = i1_nib.get_data().squeeze()
-    i2_vol = i2_nib.get_data().squeeze()
-    i1_aff = i1_nib.get_affine()
-    i2_aff = i2_nib.get_affine()
-
-    #Acquire static and moving images
-    dim = 2
-    static = i1_vol[:, 64, :].transpose()[::-1, ::-1].astype(np.float64)
-    static_aff = np.eye(1+dim)
-    smask = (static>0).astype(np.int32)
-
-    use_synthetic_affine = True
-    if use_synthetic_affine:
-        gt_aff = np.array([[1, 0, -0.7], [0, 1, 0.7], [0, 0, 1]])
-        moving = aff_warp_2d(static, static_aff, static, static_aff, gt_aff).astype(np.float64)
-        moving_aff = np.eye(1+dim)
-    else:
-        moving = i2_vol[:, 64, :].transpose()[::-1, ::-1].astype(np.float64)
-        moving_aff = np.eye(1+dim)
-
-    #Warp moving image to the common reference
-    warped = aff_warp_2d(static, static_aff, moving, moving_aff, np.eye(1+dim)).astype(np.float64)
-    wmask = (warped>0).astype(np.int32)
-
-    #Gradient of the warped image
-    grad_w = np.empty(shape=(warped.shape)+(dim,))
-    for i, grad in enumerate(sp.gradient(moving)):
-        grad_w[..., i] = grad
-
-    #Initialize distribution estimation
-    pdf = mattes.MattesPDF(32, static, warped)
-
-    theta = np.array([0.0, 0.0])
-    pdf.update_pdfs_dense(static, warped, smask, wmask)
-    pdf.update_gradient_dense(theta, 'translation', static, warped, static_aff, grad_w, smask, wmask)
-    pdf.update_mi_metric(True)
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    theta = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    pdf.update_gradient_dense(theta, 'affine', static, warped, static_aff, grad_w, smask, wmask)
-
-    theta = np.array([0.0])
-    pdf.update_gradient_dense(theta, 'rotation', static, warped, static_aff, grad_w, smask, wmask)
-
-    theta = np.array([0.0])
-    pdf.update_gradient_dense(theta, 'scale', static, warped, static_aff, grad_w, smask, wmask)
-
-
-
-    max_iter = 10
-    for i in range(max_iter):
-        pass

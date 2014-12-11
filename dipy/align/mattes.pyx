@@ -71,6 +71,21 @@ class MattesBase(object):
 
 
     def update_pdfs_dense(self, static, moving, smask, mmask):
+        r''' Computes the Joint Probability Density Function of of two images
+
+        Parameters
+        ----------
+        static: array, shape (S, R, C)
+            static image
+        moving: array, shape (S, R, C)
+            moving image
+        smask: array, shape (S, R, C)
+            mask of static object being registered (a binary array with 1's inside
+            the object of interest and 0's along the background)
+        mmask: array, shape (S, R, C)
+            mask of moving object being registered (a binary array with 1's inside
+            the object of interest and 0's along the background)
+        '''
         dim = len(static.shape)
         if dim == 2:
             _compute_pdfs_dense_2d(static, moving, smask, mmask,
@@ -85,11 +100,50 @@ class MattesBase(object):
 
 
     def update_pdfs_sparse(self, sval, mval):
+        r''' Computes the Probability Density Functions of paired intensities
+
+        Parameters
+        ----------
+        sval: array, shape (n,)
+            sampled intensities from the static image at sampled_points
+        mval: array, shape (n,)
+            sampled intensities from the moving image at sampled_points
+        '''
         energy = _compute_pdfs_sparse(sval, mval, self.smin, self.sdelta,
                                    self.nbins, self.mmin, self.mdelta, self.padding, self.joint, self.smarginal, self.mmarginal)
 
 
     def update_gradient_dense(self, theta, transform, static, moving, grid_to_space, mgradient, smask, mmask):
+        r''' Computes the Gradient of the joint PDF w.r.t. transform parameters
+
+        Computes the vector of partial derivatives of the joint histogram w.r.t.
+        each transformation parameter.
+
+        Parameters
+        ----------
+        theta: array, shape (n,)
+            parameters of the transformation to compute the gradient from
+        transform: int
+            1 = TRANSLATION
+            2 = ROTATION
+            3 = SCALING
+            4 = AFFINE
+        static: array, shape (S, R, C)
+            static image
+        moving: array, shape (S, R, C)
+            moving image
+        grid_to_space: array, shape (4, 4)
+            the grid-to-space transform associated to images static and moving (
+            we assume that both images have already been sampled at a common grid)
+        mgradient: array, shape (S, R, C, 3)
+            the gradient of the moving image
+        smask: array, shape (S, R, C)
+            mask of static object being registered (a binary array with 1's inside
+            the object of interest and 0's along the background)
+        mmask: array, shape (S, R, C)
+            mask of moving object being registered (a binary array with 1's inside
+            the object of interest and 0's along the background)
+        '''
         cdef:
             jacobian_function jacobian = NULL
 
@@ -101,7 +155,6 @@ class MattesBase(object):
 
         if (self.joint_grad is None) or (self.joint_grad.shape[2] != theta.shape[0]):
             self.joint_grad = np.ndarray(shape = (self.nbins, self.nbins, theta.shape[0]), dtype = np.float64)
-
         if dim == 2:
             _joint_pdf_gradient_dense_2d(theta, jacobian, static, moving, grid_to_space, mgradient,
                                          smask, mmask, self.smin, self.sdelta, self.mmin, self.mdelta,
@@ -114,7 +167,30 @@ class MattesBase(object):
             raise ValueError('Only dimensions 2 and 3 are supported. '+str(dim)+' received')
 
 
-    def update_gradient_sparse(self, dim, theta, transform, sval, mval, sample_points, mgradient):
+    def update_gradient_sparse(self, theta, transform, sval, mval, sample_points, mgradient):
+        r''' Computes the Gradient of the joint PDF w.r.t. transform parameters
+
+        Computes the vector of partial derivatives of the joint histogram w.r.t.
+        each transformation parameter.
+
+        Parameters
+        ----------
+        theta: array, shape (n,)
+            parameters to compute the gradient at
+        transform: int
+            1 = TRANSLATION
+            2 = ROTATION
+            3 = SCALING
+            4 = AFFINE
+        sval: array, shape (m,)
+            sampled intensities from the static image at sampled_points
+        mval: array, shape (m,)
+            sampled intensities from the moving image at sampled_points
+        sample_points: array, shape (m, 3)
+            coordinates (in physical space) of the points the images were sampled at
+        mgradient: array, shape (m, 3)
+            the gradient of the moving image at the sample points
+        '''
         cdef:
             jacobian_function jacobian = NULL
 
@@ -140,6 +216,14 @@ class MattesBase(object):
 
 
     def update_mi_metric(self, update_gradient=True):
+        r""" Computes current value and gradient of the MI metric
+        
+        Parameters
+        ----------
+        update_gradient : Boolean
+            boolean indicating if the gradient must be computed (if False,
+            only the value is computed). Default is True.
+        """
         if update_gradient:
             grad_dimension = self.joint_grad.shape[2]
             if (self.metric_grad is None) or (self.metric_grad.shape[0] != grad_dimension):
@@ -877,7 +961,7 @@ cdef double _compute_mattes_mi(double[:,:] joint, double[:,:,:] joint_gradient,
     metric_value = 0
     for i in range(nrows):
         for j in range(ncols):
-            if mmarginal[j] < epsilon:
+            if joint[i,j] < epsilon or mmarginal[j] < epsilon:
                 continue
 
             factor = log(joint[i,j] / mmarginal[j])
