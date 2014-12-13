@@ -18,12 +18,28 @@ transform_type = {'TRANSLATION':TRANSLATION,
                   'SCALING':SCALING,
                   'AFFINE':AFFINE}
 
+#This dictionary allows us to get the number of parameters of the available transforms
+number_of_parameters = {(TRANSLATION,2): 2,
+                        (TRANSLATION,3): 3,
+                        (ROTATION,2): 1,
+                        (ROTATION,3): 3,
+                        (SCALING,2): 1,
+                        (SCALING,3): 1,
+                        (AFFINE,2): 6,
+                        (AFFINE,3): 12}
+
 def eval_jacobian_function(int transform_type, int dim, double[:] theta, double[:] x, double[:,:] J):
     r""" Compute the Jacobian of a transformation with given parameters at x
-
     """
     with nogil:
         get_jacobian_function(transform_type, dim)(theta, x, J)
+
+
+def param_to_matrix(int transform_type, int dim, double[:] theta, double[:,:] T):
+    r""" Compute the Jacobian of a transformation with given parameters at x
+    """
+    with nogil:
+        get_param_to_matrix_function(transform_type, dim)(theta, T)
 
 
 cdef jacobian_function get_jacobian_function(int transform_type, int dim) nogil:
@@ -50,7 +66,7 @@ cdef jacobian_function get_jacobian_function(int transform_type, int dim) nogil:
     return NULL
 
 
-cdef param_to_matrix_function get_param_to_matrix_function(int transform_type, int dim):
+cdef param_to_matrix_function get_param_to_matrix_function(int transform_type, int dim) nogil:
     r""" Param-to-Matrix function of a given transform and dimension
     """
     if dim == 2:
@@ -74,43 +90,13 @@ cdef param_to_matrix_function get_param_to_matrix_function(int transform_type, i
     return NULL
 
 
-cdef void _rotation_matrix_2d(double[:] theta, double[:,:] R):
+cdef void _rotation_matrix_2d(double[:] theta, double[:,:] R) nogil:
     cdef:
         double ct = cos(theta[0])
         double st = sin(theta[0])
-    R[0,0], R[0,1] = ct, -st
-    R[1,0], R[1,1] = st, ct
-
-
-cdef void _rotation_matrix_3d(double[:] theta, double[:,:] R):
-    cdef:
-        double sa = sin(theta[0])
-        double ca = cos(theta[0])
-        double sb = sin(theta[1])
-        double cb = cos(theta[1])
-        double sc = sin(theta[2])
-        double cc = cos(theta[2])
-        double[:,:] rot_a = np.ndarray(shape=(3,3), dtype = np.float64)
-        double[:,:] rot_b = np.ndarray(shape=(3,3), dtype = np.float64)
-        double[:,:] rot_c = np.ndarray(shape=(3,3), dtype = np.float64)
-        double[:,:] temp = np.ndarray(shape=(3,3), dtype = np.float64)
-
-    with nogil:
-        rot_a[0,0], rot_a[0, 1], rot_a[0, 2] = 1.0, 0.0, 0.0
-        rot_a[1,0], rot_a[1, 1], rot_a[1, 2] = 0.0,  ca, -sa
-        rot_a[2,0], rot_a[2, 1], rot_a[2, 2] = 0.0,  sa,  ca
-
-        rot_b[0,0], rot_b[0, 1], rot_b[0, 2] =  cb, 0.0,  sb
-        rot_b[1,0], rot_b[1, 1], rot_b[1, 2] = 0.0, 1.0, 0.0
-        rot_b[2,0], rot_b[2, 1], rot_b[2, 2] = -sb, 0.0,  cb
-
-        rot_c[0,0], rot_c[0, 1], rot_c[0, 2] =  cc, -sc, 0.0
-        rot_c[1,0], rot_c[1, 1], rot_c[1, 2] =  sc,  cc, 0.0
-        rot_c[2,0], rot_c[2, 1], rot_c[2, 2] = 0.0, 0.0, 1.0
-
-        # Compute rot_c * rot_a * rot_b
-        _mult_mat_3d(rot_a, rot_b, temp)
-        _mult_mat_3d(rot_c, temp, R)
+    R[0,0], R[0,1], R[0,2] = ct, -st, 0
+    R[1,0], R[1,1], R[1,2] = st, ct, 0
+    R[2,0], R[2,1], R[2,2] = 0, 0, 1
 
 
 cdef int _rotation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
@@ -133,6 +119,37 @@ cdef int _rotation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogi
     return 0
 
 
+cdef void _rotation_matrix_3d(double[:] theta, double[:,:] R) nogil:
+    r""" Product of rotation matrices around canonical axes
+
+    Product of rotation matrices of angles theta[0], theta[1],
+    theta[2] around axes x, y, z applied in the following order: y, x, z.
+    This order was chosen for consistency with ANTS.
+
+    Parameters
+    ----------
+    theta : array, shape(3,)
+        theta[0] : rotation angle around x axis
+        theta[1] : rotation angle around y axis
+        theta[2] : rotation angle around z axis
+    R : array, shape(3, 3)
+        array to write the rotation matrix
+    """
+    cdef:
+        double sa = sin(theta[0])
+        double ca = cos(theta[0])
+        double sb = sin(theta[1])
+        double cb = cos(theta[1])
+        double sc = sin(theta[2])
+        double cc = cos(theta[2])
+
+    with nogil:
+        R[0,0], R[0,1], R[0,2], R[0, 3] = cc*cb-sc*sa*sb, -sc*ca, cc*sb+sc*sa*cb, 0
+        R[1,0], R[1,1], R[1,2], R[1, 3] = sc*cb+cc*sa*sb, cc*ca, sc*sb-cc*sa*cb, 0
+        R[2,0], R[2,1], R[2,2], R[2, 3] = -ca*sb, sa, ca*cb, 0
+        R[3,0], R[3,1], R[3,2], R[3, 3] = 0, 0, 0, 1
+
+
 cdef int _rotation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
     r''' Jacobian matrix of a 3D rotation transform with parameters theta, at x
     '''
@@ -144,7 +161,6 @@ cdef int _rotation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogi
         double sc = sin(theta[2])
         double cc = cos(theta[2])
         double px = x[0], py = x[1], pz = x[2]
-
 
     J[0, 0] = ( -sc * ca * sb ) * px + ( sc * sa ) * py + ( sc * ca * cb ) * pz
     J[1, 0] = ( cc * ca * sb ) * px + ( -cc * sa ) * py + ( -cc * ca * cb ) * pz
@@ -163,11 +179,17 @@ cdef int _rotation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogi
     return 0
 
 
-cdef void _scaling_matrix_2d(double[:] theta, double[:,:] R):
-    pass
+cdef void _scaling_matrix_2d(double[:] theta, double[:,:] R) nogil:
+    R[0,0], R[0,1], R[0, 2] = theta[0], 0, 0
+    R[1,0], R[1,1], R[1, 2] = 0, theta[0], 0
+    R[2,0], R[2,1], R[2, 2] = 0, 0, 1
 
-cdef void _scaling_matrix_3d(double[:] theta, double[:,:] R):
-    pass
+
+cdef void _scaling_matrix_3d(double[:] theta, double[:,:] R) nogil:
+    R[0,0], R[0,1], R[0,2], R[0,3] = theta[0], 0, 0, 0
+    R[1,0], R[1,1], R[1,2], R[1,3] = 0, theta[0], 0, 0
+    R[2,0], R[2,1], R[2,2], R[2,3] = 0, 0, theta[0], 0
+    R[3,0], R[3,1], R[3,2], R[3,3] = 0, 0, 0, 1
 
 
 cdef int _scaling_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
@@ -195,12 +217,17 @@ cdef int _scaling_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil
     return 0
 
 
-cdef void _translation_matrix_2d(double[:] theta, double[:,:] R):
-    pass
+cdef void _translation_matrix_2d(double[:] theta, double[:,:] R) nogil:
+    R[0,0], R[0,1], R[0, 2] = 1, 0, theta[0]
+    R[1,0], R[1,1], R[1, 2] = 0, 1, theta[1]
+    R[2,0], R[2,1], R[2, 2] = 0, 0, 1
 
 
-cdef void _translation_matrix_3d(double[:] theta, double[:,:] R):
-    pass
+cdef void _translation_matrix_3d(double[:] theta, double[:,:] R) nogil:
+    R[0,0], R[0,1], R[0,2], R[0,3] = 1, 0, 0, theta[0]
+    R[1,0], R[1,1], R[1,2], R[1,3] = 0, 1, 0, theta[1]
+    R[2,0], R[2,1], R[2,2], R[2,3] = 0, 0, 1, theta[2]
+    R[3,0], R[3,1], R[3,2], R[3,3] = 0, 0, 0, 1
 
 
 cdef int _translation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
@@ -239,12 +266,17 @@ cdef int _translation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) n
     return 1
 
 
-cdef void _affine_matrix_2d(double[:] theta, double[:,:] R):
-    pass
+cdef void _affine_matrix_2d(double[:] theta, double[:,:] R) nogil:
+    R[0,0], R[0,1], R[0, 2] = theta[0], theta[1], theta[2]
+    R[1,0], R[1,1], R[1, 2] = theta[3], theta[4], theta[5]
+    R[2,0], R[2,1], R[2, 2] = 0, 0, 1
 
 
-cdef void _affine_matrix_3d(double[:] theta, double[:,:] R):
-    pass
+cdef void _affine_matrix_3d(double[:] theta, double[:,:] R) nogil:
+    R[0,0], R[0,1], R[0,2], R[0,3] = theta[0], theta[1], theta[2], theta[3]
+    R[1,0], R[1,1], R[1,2], R[1,3] = theta[4], theta[5], theta[6], theta[7]
+    R[2,0], R[2,1], R[2,2], R[2,3] = theta[8], theta[9], theta[10], theta[11]
+    R[3,0], R[3,1], R[3,2], R[3,3] = 0, 0, 0, 1
 
 
 cdef int _affine_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
@@ -317,15 +349,3 @@ cdef int _affine_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
     # This Jacobian depends on x (it's not constant): return 0
     return 0
 
-    
-############### Not sure if this is the appropriate place for this helper#####
-cdef inline void _mult_mat_3d(double[:,:] A, double[:,:] B, double[:,:] C) nogil:
-    r''' Multiplies two 3x3 matrices A, B and writes the product in C
-    '''
-    cdef:
-        cnp.npy_intp i, j
-
-    for i in range(3):
-        for j in range(3):
-            C[i, j] = A[i, 0]*B[0, j] + A[i, 1]*B[1, j] + A[i, 2]*B[2, j]
-            

@@ -1,17 +1,71 @@
 import numpy as np
+import scipy as sp
 import scipy.ndimage as ndimage
 from dipy.align import floating
 import dipy.align.vector_fields as vf
 from dipy.align.mattes import MattesBase
+from dipy.core.optimize import Optimizer
+from dipy.align.transforms import (transform_type,
+                                   number_of_parameters,
+                                   param_to_matrix)
 
 class MattesMIMetric(MattesBase):
-    def __init__():
-        pass
+    def __init__(self, nbins=32, padding=2):
+        super(MattesMIMetric, self).__init__(nbins, padding)
+
+    def setup(self, transform, static, moving, static_aff=None, moving_aff=None, smask=None, mmask=None, prealign=None):
+        MattesBase.setup(self, static, moving, smask, mmask)
+        self.dim = len(static.shape)
+        self.transform = transform_type[transform]
+        self.static = static
+        self.moving = moving
+        self.static_aff = static_aff
+        self.moving_aff = moving_aff
+        self.smask = smask
+        self.mmask = mmask
+        self.prealign = prealign
+
+    def _update_dense(self, xopt):
+        # Get the matrix associated to the xopt parameter vector
+        T = np.empty(shape=(self.dim + 1, self.dim + 1))
+        param_to_matrix(self.transform, self.dim, xopt, T)
+        if self.prealign is not None:
+            T = T.dot(self.prealign)
+
+        # Warp the moving image
+        self.warped = aff_warp(self.static, self.static_aff, self.moving, self.moving_aff, T).astype(np.float64)
+
+        # Get the warped mask.
+        # Note: we should warp mmask with nearest neighbor interpolation instead
+        self.wmask = (self.warped>0).astype(np.int32)
+
+        # Compute the gradient of the moving image at the current transform (i.e. warped)
+        self.grad_w = np.empty(shape=(self.warped.shape)+(self.dim,))
+        for i, grad in enumerate(sp.gradient(self.moving)):
+            self.grad_w[..., i] = grad
+
+        # Update the joint and marginal intensity distributions
+        self.update_pdfs_dense(self.static, self.warped, self.smask, self.wmask)
+        # Compute the gradient of the joint PDF w.r.t. parameters
+        self.update_gradient_dense(xopt, self.transform, self.static, self.warped,
+                                self.static_aff, self.grad_w, self.smask, self.wmask)
+        # Evaluate the mutual information and its gradient
+        # The results are in self.metric_val and self.metric_grad
+        # ready to be returned from 'distance' and 'gradient'
+        self.update_mi_metric(True)
+
+    def distance(self, xopt):
+        self._update_dense(xopt)
+        return self.metric_val
+
+    def gradient(self, xopt):
+        self._update_dense(xopt)
+        return self.metric_grad
 
 
 class AffineRegistration(object):
-    def __init__(self, metric=None, x0="rigid", method='L-BFGS-B',
-                 bounds=None, verbose=False, options=None,
+    def __init__(self, metric=None, method='CG',
+                 bounds=None, verbose=True, options=None,
                  evolution=False):
 
         self.metric = metric
@@ -27,9 +81,8 @@ class AffineRegistration(object):
         self.options = options
         self.evolution = evolution
 
-
     def optimize(self, static, moving, transform, x0, static_affine=None, moving_affine=None,
-                 prealign=None):
+                 smask=None, mmask=None, prealign=None):
         r'''
         Parameters
         ----------
@@ -46,34 +99,35 @@ class AffineRegistration(object):
                 Start from identity
         '''
         self.dim = len(static.shape)
-        if dim == 2:
-            nparam = {'translation':2, 'rotation':1, 'iso':1, 'aniso':2, 'affine':6}
-        elif dim == 3:
-            nparam = {'translation':3, 'rotation':3, 'iso':1, 'aniso':3, 'affine':12}
-        else:
-            raise ValueError('Unsuported image dimension: '+str(dim))
+        self.transform_type = transform_type[transform]
+        self.nparams = number_of_parameters[(self.transform_type, self.dim)]
 
-        self.nparam = nparam
-        #Assume that zero parameter vector maps to identity
+        # If x0 was not provided, assume that a zero parameter vector maps to identity
         if x0 is None:
-            x0 = np.zeros(self.nparam)
+            x0 = np.zeros(self.nparams)
         if prealign is None:
-            prealign = np.eye(dim + 1)
+            self.prealign = np.eye(self.dim + 1)
         elif prealign == 'mass':
-            prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
+            self.prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
         elif prealign == 'origins':
-            prealign = aff_origins(static, static_affine, moving, moving_affine)
+            self.prealign = aff_origins(static, static_affine, moving, moving_affine)
         elif prealign == 'centers':
-            prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
+            self.prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
 
-        self.metric.setup(prealign)#Provide the pre-align matrix. The metric must store it
-        distance_method = self.metric.distance
-        gradient_method = self.metric.gradient
+        self.metric.setup(transform, static, moving, static_affine, moving_affine, smask, mmask, prealign)
 
-        opt = Optimizer(gradient_method, x0, method=self.method,
+        if self.options is None:
+            self.options = {'xtol': 1e-6, 'ftol': 1e-6, 'maxiter': 1e6}
+
+        print('Starting optimization...')
+        opt = Optimizer(self.metric.distance, x0, method=self.method, jac = self.metric.gradient,
                         options=self.options, evolution=self.evolution)
+        print('Finished optimization...')
         if self.verbose:
             opt.print_summary()
+
+        self.xopt = opt.xopt
+        return self.xopt
 
 
 def aff_warp(static, static_affine, moving, moving_affine, transform):

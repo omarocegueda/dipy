@@ -26,7 +26,7 @@ be called once for each sample static/moving voxel pair. This way we
 can make this call inside a nogil loop
 """
 
-ctypedef void (*param_to_matrix_function)(double[:], double[:,:])
+ctypedef void (*param_to_matrix_function)(double[:], double[:,:]) nogil
 r""" Type of a function that computes the matrix associated to an
 affine transform in canonical coordinates.
 
@@ -37,5 +37,4 @@ to be declared as nogil.
 """
 
 cdef jacobian_function get_jacobian_function(int transform_type, int dim) nogil
-cdef param_to_matrix_function get_param_to_matrix_function(int transform_type, int dim)
-cdef inline void _mult_mat_3d(double[:,:] A, double[:,:] B, double[:,:] C) nogil
+cdef param_to_matrix_function get_param_to_matrix_function(int transform_type, int dim) nogil

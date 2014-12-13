@@ -13,7 +13,7 @@ from dipy.align.vector_fields cimport(_apply_affine_3d_x0,
                                       _apply_affine_2d_x0,
                                       _apply_affine_2d_x1)
 
-from dipy.align.transforms cimport (jacobian_function, 
+from dipy.align.transforms cimport (jacobian_function,
                                     param_to_matrix_function,
                                     get_jacobian_function)
 
@@ -23,18 +23,9 @@ cdef extern from "dpy_math.h" nogil:
     double log(double)
 
 class MattesBase(object):
-    def __init__(self, nbins, static, moving, smask=None, mmask=None, padding=2):
+    def __init__(self, nbins, padding):
         r""" MattesBase
         Base class for the Mattes' Mutual Information metric
-
-        Parameters
-        ----------
-        nbins : int
-        static : array
-        moving : array
-        smask : array
-        mmask : array
-        padding : int
 
         Notes: we need this class in cython to allow _joint_pdf_gradient_dense_2d
         and _joint_pdf_gradient_dense_3d to receive a pointer to a nogil function
@@ -43,9 +34,25 @@ class MattesBase(object):
 
         The reason we need a class is to encapsulate all the parameters related to the
         joint and marginal distributions.
+
+        Parameters
+        ----------
+        nbins : int
+        padding : int
         """
         self.nbins = nbins
         self.padding = padding
+
+    def setup(self, static, moving, smask=None, mmask=None):
+        r""" Compute histogram settings to store PDF of input images
+
+        Parameters
+        ----------
+        static : array
+        moving : array
+        smask : array
+        mmask : array
+        """
 
         if smask is None:
             smask = np.array(static > 0).astype(np.int32)
@@ -57,17 +64,17 @@ class MattesBase(object):
         self.mmin = np.min(moving[mmask!=0])
         self.mmax = np.max(moving[mmask!=0])
 
-        self.sdelta = (self.smax - self.smin)/(nbins - padding)
-        self.mdelta = (self.mmax - self.mmin)/(nbins - padding)
-        self.smin = self.smin/self.sdelta - padding
-        self.mmin = self.mmin/self.sdelta - padding
+        self.sdelta = (self.smax - self.smin)/(self.nbins - self.padding)
+        self.mdelta = (self.mmax - self.mmin)/(self.nbins - self.padding)
+        self.smin = self.smin/self.sdelta - self.padding
+        self.mmin = self.mmin/self.sdelta - self.padding
 
         self.joint_grad = None
         self.metric_grad = None
         self.metric_val = 0
-        self.joint = np.ndarray(shape = (nbins, nbins), dtype = np.float64)
-        self.smarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
-        self.mmarginal = np.ndarray(shape = (nbins,), dtype = np.float64)
+        self.joint = np.ndarray(shape = (self.nbins, self.nbins), dtype = np.float64)
+        self.smarginal = np.ndarray(shape = (self.nbins,), dtype = np.float64)
+        self.mmarginal = np.ndarray(shape = (self.nbins,), dtype = np.float64)
 
 
     def update_pdfs_dense(self, static, moving, smask, mmask):
@@ -217,7 +224,7 @@ class MattesBase(object):
 
     def update_mi_metric(self, update_gradient=True):
         r""" Computes current value and gradient of the MI metric
-        
+
         Parameters
         ----------
         update_gradient : Boolean
@@ -971,7 +978,7 @@ cdef double _compute_mattes_mi(double[:,:] joint, double[:,:,:] joint_gradient,
                     mi_gradient[k] -= joint_gradient[i, j, k] * factor
 
             if smarginal[i] > epsilon:
-                metric_value += joint[i,j] * (factor - log(smarginal[i]))
+                metric_value -= joint[i,j] * (factor - log(smarginal[i]))
 
     return metric_value
 
