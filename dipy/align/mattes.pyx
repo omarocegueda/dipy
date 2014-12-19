@@ -983,4 +983,107 @@ cdef double _compute_mattes_mi(double[:,:] joint, double[:,:,:] joint_gradient,
     return metric_value
 
 
+def sample_domain_2d(int[:] shape, int n, int[:,:] samples, int[:,:] mask=None):
+    r""" Take n samples from a domain of the given shape where mask is not zero
+    Returns the number of samples actually taken
+
+    >>> import dipy.align.mattes as mattes
+    >>> import dipy.align.vector_fields as vf
+    >>> mask = np.array(vf.create_circle(10,10,3), dtype=np.int32)
+    >>> samples = np.empty((5,2), dtype=np.int32)
+    >>> mattes.sample_domain_2d(np.array(mask.shape, dtype=np.int32), 5, samples, mask)
+    5
+    >>> [mask[tuple(x)] for x in samples]
+    [1, 1, 1, 1, 1]
+    """
+    cdef:
+        int tmp, m, r, i, j
+        double p, q
+        int[:] index = np.empty(shape=(shape[0]*shape[1], ), dtype=np.int32)
+    with nogil:
+        # make an array of all avalable indices
+        m = 0
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                if mask is None or mask[i, j] != 0:
+                    index[m] = i * shape[1] + j
+                    m += 1
+        if n > m:
+            n = m
+    selected = np.random.choice(index[:m], n)
+    for i in range(n):
+        samples[i,0] = selected[i] // shape[1]
+        samples[i,1] = selected[i] % shape[1]
+    return n
+
+
+def sample_domain_2d(int[:] shape, int n, double[:,:] samples, int[:,:] mask=None):
+    r""" Take n samples from a domain of the given shape where mask is not zero
+    Returns the number of samples actually taken
+
+    >>> import dipy.align.mattes as mattes
+    >>> import dipy.align.vector_fields as vf
+    >>> mask = np.array(vf.create_circle(10,10,3), dtype=np.int32)
+    >>> samples = np.empty((5,2))
+    >>> mattes.sample_domain_2d(np.array(mask.shape, dtype=np.int32), 5, samples, mask)
+    5
+    >>> [mask[tuple(x)] for x in samples]
+    [1, 1, 1, 1, 1]
+    """
+    cdef:
+        int tmp, m, r, i, j
+        double p, q
+        int[:] index = np.empty(shape=(shape[0]*shape[1], ), dtype=np.int32)
+    with nogil:
+        # make an array of all avalable indices
+        m = 0
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                if mask is None or mask[i, j] != 0:
+                    index[m] = i * shape[1] + j
+                    m += 1
+        if n > m:
+            n = m
+    selected = np.random.choice(index[:m], n)
+    for i in range(n):
+        samples[i,0] = selected[i] // shape[1]
+        samples[i,1] = selected[i] % shape[1]
+    return n
+
+
+def sample_domain_3d(int[:] shape, int n, double[:,:] samples, int[:,:,:] mask=None):
+    r""" Take n samples from a domain of the given shape where mask is not zero
+    Returns the number of samples actually taken
+
+    >>> import dipy.align.mattes as mattes
+    >>> import dipy.align.vector_fields as vf
+    >>> mask = np.array(vf.create_sphere(10,10,10,3), dtype=np.int32)
+    >>> samples = np.empty((10,3))
+    >>> mattes.sample_domain_3d(np.array(mask.shape, dtype=np.int32), 10, samples, mask)
+    10
+    >>> [mask[tuple(x)] for x in samples]
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    """
+    cdef:
+        int tmp, m, r, i, j, k, ss
+        double p, q
+        int[:] index = np.empty(shape=(shape[0]*shape[1]*shape[2], ), dtype=np.int32)
+    with nogil:
+        # make an array of all avalable indices
+        m = 0
+        ss = shape[1] * shape[2]
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                for k in range(shape[2]):
+                    if mask is None or mask[i, j, k] != 0:
+                        index[m] = i * ss + j * shape[2] + k
+                        m += 1
+        if n > m:
+            n = m
+    selected = np.random.choice(index[:m], n)
+    for i in range(n):
+        samples[i,2] = selected[i] % shape[2]
+        samples[i,1] = (selected[i] % ss) // shape[2]
+        samples[i,0] = selected[i] // ss
+    return n
 

@@ -3,11 +3,38 @@ import scipy as sp
 import scipy.ndimage as ndimage
 from dipy.align import floating
 import dipy.align.vector_fields as vf
+import dipy.align.mattes as mattes
 from dipy.align.mattes import MattesBase
 from dipy.core.optimize import Optimizer
+import matplotlib.pyplot as plt
 from dipy.align.transforms import (transform_type,
                                    number_of_parameters,
-                                   param_to_matrix)
+                                   param_to_matrix,
+                                   get_identity_parameters)
+from dipy.align.imwarp import (get_direction_and_spacings,
+                               ScaleSpace)
+
+def estimate_param_scales(transform_type, dim, samples):
+    nsamples = samples.shape[0]
+    epsilon = 0.01
+
+    n = number_of_parameters[transform_type, dim]
+    theta = np.empty(n)
+    T = np.ndarray((dim + 1, dim + 1))
+
+    scales = np.zeros(n)
+    for i in range(n):
+        get_identity_parameters(transform_type, dim, theta)
+        theta[i] += epsilon
+        param_to_matrix(transform_type, dim, theta, T)
+        transformed = samples.dot(T.transpose())
+        max_shift_sq = np.sum((transformed - samples)**2, 1).max()
+        scales[i] = max_shift_sq
+
+    scales[scales==0] = scales[scales>0].min()
+    scales /= (epsilon*epsilon)
+    return scales
+
 
 class MattesMIMetric(MattesBase):
     def __init__(self, nbins=32, padding=2):
@@ -17,13 +44,14 @@ class MattesMIMetric(MattesBase):
         MattesBase.setup(self, static, moving, smask, mmask)
         self.dim = len(static.shape)
         self.transform = transform_type[transform]
-        self.static = static
-        self.moving = moving
+        self.static = np.array(static).astype(np.float64)
+        self.moving = np.array(moving).astype(np.float64)
         self.static_aff = static_aff
         self.moving_aff = moving_aff
         self.smask = smask
         self.mmask = mmask
         self.prealign = prealign
+        self.param_scales = None
 
     def _update_dense(self, xopt):
         # Get the matrix associated to the xopt parameter vector
@@ -37,11 +65,11 @@ class MattesMIMetric(MattesBase):
 
         # Get the warped mask.
         # Note: we should warp mmask with nearest neighbor interpolation instead
-        self.wmask = (self.warped>0).astype(np.int32)
+        self.wmask = aff_warp(self.static, self.static_aff, self.mmask, self.moving_aff, T, True).astype(np.int32)
 
         # Compute the gradient of the moving image at the current transform (i.e. warped)
         self.grad_w = np.empty(shape=(self.warped.shape)+(self.dim,))
-        for i, grad in enumerate(sp.gradient(self.moving)):
+        for i, grad in enumerate(sp.gradient(self.warped)):
             self.grad_w[..., i] = grad
 
         # Update the joint and marginal intensity distributions
@@ -60,12 +88,26 @@ class MattesMIMetric(MattesBase):
 
     def gradient(self, xopt):
         self._update_dense(xopt)
+        if self.param_scales is not None:
+            self.metric_grad /= self.param_scales
         return self.metric_grad
+
+    def value_and_gradient(self, xopt):
+        self._update_dense(xopt)
+        if self.param_scales is not None:
+            self.metric_grad /= self.param_scales
+        return self.metric_val, self.metric_grad
 
 
 class AffineRegistration(object):
-    def __init__(self, metric=None, method='CG',
-                 bounds=None, verbose=True, options=None,
+    def __init__(self,
+                 metric=None,
+                 level_iters=None,
+                 opt_tol=1e-5,
+                 ss_sigma_factor=1.0,
+                 bounds=None,
+                 verbose=True,
+                 options=None,
                  evolution=False):
 
         self.metric = metric
@@ -73,21 +115,110 @@ class AffineRegistration(object):
         if self.metric is None:
             self.metric = MattesMIMetric()
 
-        self.verbose = verbose
-        self.method = method
-        if self.method not in ['CG']:
-            raise ValueError('Only Conjugate Gradient can be used')
+        if level_iters is None:
+            level_iters = [10000, 10000, 2500]
+        self.level_iters = level_iters
+        self.levels = len(level_iters)
+        if self.levels == 0:
+            raise ValueError('The iterations list cannot be empty')
+
+        self.opt_tol = opt_tol
+        self.ss_sigma_factor = ss_sigma_factor
+
         self.bounds = bounds
+        self.verbose = verbose
         self.options = options
         self.evolution = evolution
+        self.method = 'CG'
+
+
+    def _init_optimizer(self, static, moving, transform, x0,
+                        static_affine, moving_affine, prealign):
+        r"""Initializes the registration optimizer
+
+        Initializes the optimizer by computing the scale space of the input
+        images
+
+        Parameters
+        ----------
+        static: array, shape (S, R, C) or (R, C)
+            the image to be used as reference during optimization.
+        moving: array, shape (S, R, C) or (R, C)
+            the image to be used as "moving" during optimization. It is necessary
+            to pre-align the moving image to ensure its domain
+            lies inside the domain of the deformation fields. This is assumed to
+            be accomplished by "pre-aligning" the moving image towards the
+            static using an affine transformation given by the 'prealign' matrix
+        transform: string
+            the name of the transformation to be used, must be one of
+            {'TRANSLATION', 'ROTATION', 'SCALING', 'AFFINE'}
+        x0: array, shape (n,)
+            parameters from which to start the optimization. If None, the
+            optimization will start at the identity transform. n is the
+            number of parameters of the specified transformation.
+        static_affine: array, shape (dim+1, dim+1)
+            the voxel-to-space transformation associated to the static image
+        moving_affine: array, shape (dim+1, dim+1)
+            the voxel-to-space transformation associated to the moving image
+        prealign: array, shape (dim+1, dim+1)
+            the affine transformation (operating on the physical space)
+            pre-aligning the moving image towards the static
+
+        """
+        self.dim = len(static.shape)
+        self.transform_type = transform_type[transform]
+        self.nparams = number_of_parameters[(self.transform_type, self.dim)]
+
+        # If x0 was not provided, assume that a zero parameter vector maps to identity
+        if x0 is None:
+            x0 = np.empty(self.nparams, dtype=np.float64)
+            get_identity_parameters(self.transform_type, self.dim, x0)
+        self.x0 = x0
+        if prealign is None:
+            self.prealign = np.eye(self.dim + 1)
+        elif prealign == 'mass':
+            self.prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
+        elif prealign == 'origins':
+            self.prealign = aff_origins(static, static_affine, moving, moving_affine)
+        elif prealign == 'centers':
+            self.prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
+        #Extract information from the affine matrices to create the scale space
+        static_direction, static_spacing = \
+            get_direction_and_spacings(static_affine, self.dim)
+        moving_direction, moving_spacing = \
+            get_direction_and_spacings(moving_affine, self.dim)
+
+        static = (static - static.min())/(static.max() - static.min())
+        moving = (moving - moving.min())/(moving.max() - moving.min())
+        #Build the scale space of the input images
+        self.moving_ss = ScaleSpace(moving, self.levels, moving_affine,
+                                    moving_spacing, self.ss_sigma_factor,
+                                    False)
+
+        self.static_ss = ScaleSpace(static, self.levels, static_affine,
+                                    static_spacing, self.ss_sigma_factor,
+                                    False)
+
+        # Sample the static domain
+        self.nsamples = 1000
+        self.samples = np.empty((self.nsamples, self.dim + 1))
+        self.samples[:,self.dim] = 1
+        #mask = (static>0).astype(np.int32)
+        mask = np.ones_like(static, dtype=np.int32)
+        if self.dim == 2:
+            mattes.sample_domain_2d(np.array(static.shape, dtype=np.int32), self.nsamples, self.samples, mask)
+        else:
+            mattes.sample_domain_3d(np.array(static.shape, dtype=np.int32), self.nsamples, self.samples, mask)
+        if static_affine is not None:
+            self.samples = self.samples.dot(static_affine.transpose()) # now samples are in physical space
+
 
     def optimize(self, static, moving, transform, x0, static_affine=None, moving_affine=None,
                  smask=None, mmask=None, prealign=None):
         r'''
         Parameters
         ----------
-        transform:
-
+        transform: string
         prealign: string, or matrix, or None
             If string:
                 'mass': align centers of gravity
@@ -98,39 +229,63 @@ class AffineRegistration(object):
             If None:
                 Start from identity
         '''
-        self.dim = len(static.shape)
-        self.transform_type = transform_type[transform]
-        self.nparams = number_of_parameters[(self.transform_type, self.dim)]
+        self._init_optimizer(static, moving, transform, x0, static_affine, moving_affine, prealign)
+        del prealign # now we must refer to self.prealign
 
-        # If x0 was not provided, assume that a zero parameter vector maps to identity
-        if x0 is None:
-            x0 = np.zeros(self.nparams)
-        if prealign is None:
-            self.prealign = np.eye(self.dim + 1)
-        elif prealign == 'mass':
-            self.prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
-        elif prealign == 'origins':
-            self.prealign = aff_origins(static, static_affine, moving, moving_affine)
-        elif prealign == 'centers':
-            self.prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
+        # Multi-resolution iterations
+        original_static_affine = self.static_ss.get_affine(0)
+        original_moving_affine = self.moving_ss.get_affine(0)
 
-        self.metric.setup(transform, static, moving, static_affine, moving_affine, smask, mmask, prealign)
+        if smask is None:
+            smask = np.ones_like(self.static_ss.get_image(0), dtype=np.int32)
+        if mmask is None:
+            mmask = np.ones_like(self.moving_ss.get_image(0), dtype=np.int32)
 
-        if self.options is None:
-            self.options = {'xtol': 1e-6, 'ftol': 1e-6, 'maxiter': 1e6}
+        original_smask = smask
+        original_mmask = mmask
 
-        print('Starting optimization...')
-        opt = Optimizer(self.metric.distance, x0, method=self.method, jac = self.metric.gradient,
-                        options=self.options, evolution=self.evolution)
-        print('Finished optimization...')
-        if self.verbose:
-            opt.print_summary()
+        for level in range(self.levels - 1, -1, -1):
+            self.current_level = level
+            print('Optimizing level %d [%d iterations maximum]'%(self.current_level, self.level_iters[level]))
 
-        self.xopt = opt.xopt
-        return self.xopt
+            # Resample the smooth static image to the shape of this level
+            smooth_static = self.static_ss.get_image(level)
+            current_static_shape = self.static_ss.get_domain_shape(level)
+            current_static_aff = self.static_ss.get_affine(level)
+            current_static = aff_warp(tuple(current_static_shape), current_static_aff, smooth_static, original_static_affine, None, False)
+            current_smask = aff_warp(tuple(current_static_shape), current_static_aff, original_smask, original_static_affine, None, True)
+
+            # The moving image is full resolution
+            current_moving_aff = original_moving_affine
+            current_moving = self.moving_ss.get_image(level)
+            current_mmask = original_mmask
+
+            # Prepare the metric for iterations at this resolution
+            self.metric.setup(transform, current_static, current_moving, current_static_aff, current_moving_aff, current_smask, current_mmask, self.prealign)
+            scales = estimate_param_scales(self.transform_type, self.dim, self.samples)
+            self.metric.param_scales = scales
+
+            #optimize this level
+            if self.options is None:
+                self.options = {'maxiter': self.level_iters[self.current_level]}
+
+            opt = Optimizer(self.metric.value_and_gradient, self.x0, method=self.method, jac = True,
+                            options=self.options, evolution=self.evolution)
+
+            # Update prealign matrix with optimal parameters
+            T = np.empty(shape=(self.dim + 1, self.dim + 1))
+            param_to_matrix(self.metric.transform, self.dim, opt.xopt, T)
+            self.prealign = T.dot(self.prealign)
+
+            # Start next iteration at identity
+            get_identity_parameters(self.transform_type, self.dim, self.x0)
+
+            print("Metric value: %f"%(self.metric.metric_val,))
+
+        return self.prealign
 
 
-def aff_warp(static, static_affine, moving, moving_affine, transform):
+def aff_warp(static, static_affine, moving, moving_affine, transform, nn=False):
     r""" Warps the moving image towards the static using the given transform
 
     Parameters
@@ -149,16 +304,33 @@ def aff_warp(static, static_affine, moving, moving_affine, transform):
     -------
     warped: array, shape (S, R, C)
     """
-    dim = len(static.shape)
-    if dim == 2:
-        warp_method = vf.warp_2d_affine
-    elif dim == 3:
-        warp_method = vf.warp_3d_affine
-    shape = np.array(static.shape, dtype=np.int32)
+    if type(static) is tuple:
+        dim = len(static)
+        shape = np.array(static, dtype=np.int32)
+    else:
+        dim = len(static.shape)
+        shape = np.array(static.shape, dtype=np.int32)
+    if nn:
+        input = np.array(moving,dtype=np.int32)
+        if dim == 2:
+            warp_method = vf.warp_2d_affine_nn
+        elif dim == 3:
+            warp_method = vf.warp_3d_affine_nn
+    else:
+        input = np.array(moving,dtype=floating)
+        if dim == 2:
+            warp_method = vf.warp_2d_affine
+        elif dim == 3:
+            warp_method = vf.warp_3d_affine
+
     m_aff_inv = np.linalg.inv(moving_affine)
-    composition = m_aff_inv.dot(transform.dot(static_affine))
-    warped = warp_method(np.array(moving,dtype=floating),
-                         shape, composition)
+    if transform is None:
+        composition = m_aff_inv.dot(static_affine)
+    else:
+        composition = m_aff_inv.dot(transform.dot(static_affine))
+
+    warped = warp_method(input, shape, composition)
+
     return np.array(warped)
 
 

@@ -7,13 +7,12 @@ from numpy.testing import (assert_array_equal,
                            assert_array_almost_equal,
                            assert_almost_equal,
                            assert_equal)
-
-
 import experiments.registration.dataset_info as info
 import nibabel as nib
 import dipy.align.mattes as mattes
 import scipy as sp
-from dipy.align.transforms import transform_type
+from dipy.align.transforms import (transform_type,
+                                   param_to_matrix)
 from dipy.align.imaffine import *
 import dipy.viz.regtools as rt
 import dipy.align.imaffine as imaffine
@@ -200,9 +199,6 @@ def _test_cc_residuals():
     residuals_ss = mattes.compute_cc_residuals_noboundary(sst2, t2_n, 4)
     residuals_ss = np.array(residuals_ss)
 
-
-
-
     rr = mattes.compute_cc_residuals_noboundary(t1_n, t1_n, 4)
     rr = np.array(rr)
 
@@ -229,9 +225,7 @@ def setup_synthetic_test_2d(transform, theta):
     static_aff = np.eye(1+dim)
     static_aff[:2,2] = -center
     smask = (static>0).astype(np.int32)
-
     print(">>",static_aff, moving_aff)
-
     return static, moving, static_aff, moving_aff, smask, mmask
 
 
@@ -263,11 +257,8 @@ def setup_synthetic_sequence_2d(transforms, thetas):
     static_aff = np.eye(1+dim)
     static_aff[:2,2] = -center
     smask = (static>0).astype(np.int32)
-
     print(">>",static_aff, moving_aff)
-
     return static, moving, static_aff, moving_aff, smask, mmask
-
 
 
 def test_mattes_mi_translation_2d():
@@ -335,12 +326,7 @@ def test_mattes_mi_affine_2d():
     print('theta:',theta, 'xopt:',xopt)
 
 
-def test_sequence_2d():
-
-
-
-
-def align_mattes_mi():
+def align_mattes_mi_2d():
     import experiments.registration.dataset_info as info
     import nibabel as nib
     import dipy.align.mattes as mattes
@@ -364,7 +350,7 @@ def align_mattes_mi():
     static_aff = np.eye(1+dim)
     smask = (static>0).astype(np.int32)
 
-    use_synthetic_affine = True
+    use_synthetic_affine = False
     if use_synthetic_affine:
         delta = 2.9
         gt_aff = np.array([[1, 0, -delta], [0, 1, delta], [0, 0, 1]])
@@ -376,31 +362,87 @@ def align_mattes_mi():
     else:
         moving = i2_vol[:, 64, :].transpose()[::-1, ::-1].astype(np.float64)
         moving_aff = np.eye(1+dim)
+        mmask = (moving>0).astype(np.int32)
 
-    #Gradient of the moving image
-    grad_m = np.empty(shape=(moving.shape)+(dim,))
-    for i, grad in enumerate(sp.gradient(moving)):
-        grad_m[..., i] = grad
-
-    #Initialize distribution estimation
-    #M = mattes.MattesBase(32, 2)
-    #M.setup(static, warped, smask, wmask)
-
-    #theta = np.array([0.0, 0.0])
-    #M.update_pdfs_dense(static, warped, smask, wmask)
-    #M.update_gradient_dense(theta, transform_type['TRANSLATION'], static, warped, static_aff, grad_w, smask, wmask)
-    #M.update_mi_metric(True)
+    gt = np.array([(10/180.0)*np.pi, -2.0, 2.0])
+    TT = np.ndarray((3,3))
+    param_to_matrix(transform_type["RIGID"], 2, gt, TT)
+    static = aff_warp(moving, moving_aff, static, static_aff, TT)
+    static_aff = moving_aff
+    rt.overlay_images(static, moving)
 
     MM = imaffine.MattesMIMetric(32, 2)
-    #MM.setup('TRANSLATION', static, warped, static_aff, warped_aff, smask, wmask, None)
-    #grad = MM.gradient(theta)
+    affreg = imaffine.AffineRegistration(MM, [10000, 111110, 11110], 1e-5, 1.0,
+                                         bounds=None, verbose=True, options=None,
+                                         evolution=True)
 
-    affreg = imaffine.AffineRegistration(MM, method='CG',
-                                bounds=None, verbose=True, options=None,
-                                evolution=True)
+    test_rigid_only = True
+    smask = None
+    mmask = None
+    if test_rigid_only:
+        x0 = None
+        sol = affreg.optimize(static, moving, 'RIGID', x0, static_aff, moving_aff, smask, mmask, 'mass')
+        warped = aff_warp(static, static_aff, moving, moving_aff, sol)
+        rt.overlay_images(static, warped)
+    else:# A series of transforms
+        x0 = None
+        sol_rigid = affreg.optimize(static, moving, 'RIGID', x0, static_aff, moving_aff, smask, mmask, None)
+        sol_affine = affreg.optimize(static, moving, 'AFFINE', x0, static_aff, moving_aff, smask, mmask, sol_rigid)
+        warped = aff_warp(static, static_aff, moving, moving_aff, sol_affine)
+        rt.overlay_images(static, warped)
 
-    x0 = np.array([0.0, 0.0])
-    affreg.optimize(static, moving, 'TRANSLATION', x0, static_aff, moving_aff, smask, mmask, None)
+
+def align_mattes_mi_3d():
+    import experiments.registration.dataset_info as info
+    import nibabel as nib
+    import dipy.align.mattes as mattes
+    import scipy as sp
+    from dipy.align.transforms import transform_type
+    from dipy.align.imaffine import *
+    import dipy.viz.regtools as rt
+    import dipy.align.imaffine as imaffine
+    i1_name = info.get_ibsr(1, 'strip')
+    i2_name = info.get_ibsr(2, 'strip')
+    i1_nib = nib.load(i1_name)
+    i2_nib = nib.load(i2_name)
+    i1_vol = i1_nib.get_data().squeeze().astype(np.float64)
+    i2_vol = i2_nib.get_data().squeeze().astype(np.float64)
+    i1_aff = i1_nib.get_affine()
+    i2_aff = i2_nib.get_affine()
+
+    #Acquire static and moving images
+    dim = 3
+    static = i1_vol
+    static_aff = i1_aff
+    moving = i2_vol
+    moving_aff = i2_aff
+
+    gt = np.array([(3/180.0)*np.pi, (5/180.0)*np.pi, (7/180.0)*np.pi,  -2.0, 2.0, 3.0])
+    TT = np.ndarray((4,4))
+    param_to_matrix(transform_type["RIGID"], 3, gt, TT)
+    static = aff_warp(moving, moving_aff, static, static_aff, TT)
+    static_aff = moving_aff
+    rt.overlay_slices(static, moving)
+
+    MM = imaffine.MattesMIMetric(32, 2)
+    affreg = imaffine.AffineRegistration(MM, [10000, 111110, 11110], 1e-5, 1.0,
+                                         bounds=None, verbose=True, options=None,
+                                         evolution=True)
+
+    test_rigid_only = True
+    smask = None
+    mmask = None
+    if test_rigid_only:
+        x0 = None
+        sol = affreg.optimize(static, moving, 'RIGID', x0, static_aff, moving_aff, smask, mmask, 'mass')
+        warped = aff_warp(static, static_aff, moving, moving_aff, sol)
+        rt.overlay_slices(static, warped)
+    else:# A series of transforms
+        x0 = None
+        sol_rigid = affreg.optimize(static, moving, 'RIGID', x0, static_aff, moving_aff, smask, mmask, None)
+        sol_affine = affreg.optimize(static, moving, 'AFFINE', x0, static_aff, moving_aff, smask, mmask, sol_rigid)
+        warped = aff_warp(static, static_aff, moving, moving_aff, sol_affine)
+        rt.overlay_slices(static, warped)
 
 
 if __name__ == "__main__":

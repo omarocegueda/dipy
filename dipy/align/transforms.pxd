@@ -3,9 +3,11 @@ cdef enum:
 cdef enum:
     ROTATION=2
 cdef enum:
-    SCALING=3
+    RIGID=3
 cdef enum:
-    AFFINE=4
+    SCALING=4
+cdef enum:
+    AFFINE=5
 
 ctypedef int (*jacobian_function)(double[:], double[:], double[:,:]) nogil
 r""" Type of a function that computes the Jacobian of a transform.
