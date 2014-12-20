@@ -28,7 +28,8 @@ def test_number_of_composite_parameters():
     for dim in [2, 3]:
         for s in sizes:
             subset = np.random.choice(transforms, s)
-            ttypes = np.array([transform_type[t] for t in subset], dtype=np.int32)
+            ttypes = np.array([transform_type[t] for t in subset],
+                              dtype=np.int32)
 
             expected = np.sum([number_of_parameters(t, dim) for t in ttypes])
             actual = number_of_composite_parameters(ttypes, dim)
@@ -210,7 +211,8 @@ def test_get_composite_identity():
     for dim in [2, 3]:
         for s in sizes:
             subset = np.random.choice(transforms, s)
-            ttypes = np.array([transform_type[t] for t in subset], dtype=np.int32)
+            ttypes = np.array([transform_type[t] for t in subset],
+                              dtype=np.int32)
             n = number_of_composite_parameters(ttypes, dim)
             theta = np.empty(n)
 
@@ -263,7 +265,8 @@ def test_get_composite_matrix():
     for dim in [2, 3]:
         for s in sizes:
             subset = np.random.choice(transforms, s)
-            ttypes = np.array([transform_type[t] for t in subset], dtype=np.int32)
+            ttypes = np.array([transform_type[t] for t in subset],
+                              dtype=np.int32)
             n = number_of_composite_parameters(ttypes, dim)
             theta = np.empty(n)
 
@@ -293,7 +296,8 @@ def test_get_composite_jacobian():
     for dim in [2, 3]:
         for s in sizes:
             subset = np.random.choice(transforms, s)
-            ttypes = np.array([transform_type[t] for t in subset], dtype=np.int32)
+            ttypes = np.array([transform_type[t] for t in subset],
+                              dtype=np.int32)
             n = number_of_composite_parameters(ttypes, dim)
             theta = np.empty(n)
 
@@ -328,8 +332,6 @@ def test_get_composite_jacobian():
                     expected[:,i] = g[:dim]
 
                 assert_array_almost_equal(actual, expected, decimal=5)
-
-
 
 
 if __name__=='__main__':

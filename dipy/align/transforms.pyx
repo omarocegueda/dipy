@@ -97,7 +97,8 @@ cdef int _number_of_composite_parameters(int[:] ttypes, int dim) nogil:
     return n
 
 
-def eval_jacobian_function(int ttype, int dim, double[:] theta, double[:] x, double[:,:] J):
+def eval_jacobian_function(int ttype, int dim, double[:] theta, double[:] x,
+                           double[:,:] J):
     r""" Compute the Jacobian of a transformation with given parameters at x
 
     Parameters
@@ -213,7 +214,8 @@ def get_composite_identity(int[:] ttypes, int dim, double[:] theta):
             p += q
 
 
-def get_composite_matrix(int[:] ttypes, int dim, double[:] theta, double[:,:] T):
+def get_composite_matrix(int[:] ttypes, int dim, double[:] theta,
+                         double[:,:] T):
     r""" Gets the matrix associated to a composite transform
 
     The resulting matrix is the product of the matrices associated to the
@@ -236,7 +238,6 @@ def get_composite_matrix(int[:] ttypes, int dim, double[:] theta, double[:,:] T)
         double[:] tmp = np.empty_like(theta)
         int i, j, m, t, p
 
-    # THERE MUST BE A MORE EFFICIENT WAY OF DOING THIS...
     p = 0
     m = ttypes.shape[0]
     T[:,:] = 0
@@ -327,7 +328,8 @@ cdef jacobian_function get_jacobian_function(int ttype, int dim) nogil:
     return NULL
 
 
-cdef param_to_matrix_function get_param_to_matrix_function(int ttype, int dim) nogil:
+cdef param_to_matrix_function get_param_to_matrix_function(int ttype,
+                                                           int dim) nogil:
     r""" Param-to-Matrix function of a given transform and dimension
 
     Parameters
@@ -394,7 +396,8 @@ cdef void _translation_matrix_3d(double[:] theta, double[:,:] R) nogil:
     R[3,0], R[3,1], R[3,2], R[3,3] = 0, 0, 0, 1
 
 
-cdef int _translation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
+cdef int _translation_jacobian_2d(double[:] theta, double[:] x,
+                                  double[:,:] J) nogil:
     r""" Jacobian matrix of the 2D translation transform
     The transformation is given by:
 
@@ -424,7 +427,8 @@ cdef int _translation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) n
     return 1
 
 
-cdef int _translation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
+cdef int _translation_jacobian_3d(double[:] theta, double[:] x,
+                                  double[:,:] J) nogil:
     r""" Jacobian matrix of the 3D translation transform
     The transformation is given by:
 
@@ -473,7 +477,8 @@ cdef void _rotation_matrix_2d(double[:] theta, double[:,:] R) nogil:
     R[2,0], R[2,1], R[2,2] = 0, 0, 1
 
 
-cdef int _rotation_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
+cdef int _rotation_jacobian_2d(double[:] theta, double[:] x,
+                               double[:,:] J) nogil:
     r''' Jacobian matrix of a 2D rotation transform with parameter theta, at x
 
     The transformation is given by:
@@ -536,7 +541,8 @@ cdef void _rotation_matrix_3d(double[:] theta, double[:,:] R) nogil:
     R[3,0], R[3,1], R[3,2], R[3, 3] = 0, 0, 0, 1
 
 
-cdef int _rotation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
+cdef int _rotation_jacobian_3d(double[:] theta, double[:] x,
+                               double[:,:] J) nogil:
     r''' Jacobian matrix of a 3D rotation transform with parameters theta, at x
 
     Parameters
@@ -653,10 +659,13 @@ cdef void _rigid_matrix_3d(double[:] theta, double[:,:] R) nogil:
         double cb = cos(theta[1])
         double sc = sin(theta[2])
         double cc = cos(theta[2])
+        double dx = theta[3]
+        double dy = theta[4]
+        double dz = theta[5]
 
-    R[0,0], R[0,1], R[0,2], R[0,3] = cc*cb-sc*sa*sb, -sc*ca, cc*sb+sc*sa*cb, theta[3]
-    R[1,0], R[1,1], R[1,2], R[1,3] = sc*cb+cc*sa*sb, cc*ca, sc*sb-cc*sa*cb, theta[4]
-    R[2,0], R[2,1], R[2,2], R[2,3] = -ca*sb, sa, ca*cb, theta[5]
+    R[0,0], R[0,1], R[0,2], R[0,3] = cc*cb-sc*sa*sb, -sc*ca, cc*sb+sc*sa*cb, dx
+    R[1,0], R[1,1], R[1,2], R[1,3] = sc*cb+cc*sa*sb, cc*ca, sc*sb-cc*sa*cb, dy
+    R[2,0], R[2,1], R[2,2], R[2,3] = -ca*sb, sa, ca*cb, dz
     R[3,0], R[3,1], R[3,2], R[3,3] = 0, 0, 0, 1
 
 
@@ -740,7 +749,8 @@ cdef void _scaling_matrix_3d(double[:] theta, double[:,:] R) nogil:
     R[3,0], R[3,1], R[3,2], R[3,3] = 0, 0, 0, 1
 
 
-cdef int _scaling_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
+cdef int _scaling_jacobian_2d(double[:] theta, double[:] x,
+                              double[:,:] J) nogil:
     r""" Jacobian matrix of the isotropic 2D scale transform
     The transformation is given by:
 
@@ -763,7 +773,9 @@ cdef int _scaling_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil
     # This Jacobian depends on x (it's not constant): return 0
     return 0
 
-cdef int _scaling_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
+
+cdef int _scaling_jacobian_3d(double[:] theta, double[:] x,
+                              double[:,:] J) nogil:
     r""" Jacobian matrix of the isotropic 3D scale transform
     The transformation is given by:
 
@@ -918,7 +930,6 @@ cdef int _affine_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
     J[2, 11] = 1
     # This Jacobian depends on x (it's not constant): return 0
     return 0
-
 
 
 cdef void _dot_prod(double[:,:] A, double[:,:] B, double[:,:] C):
