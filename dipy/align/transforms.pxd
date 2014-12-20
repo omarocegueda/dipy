@@ -39,4 +39,5 @@ to be declared as nogil.
 """
 
 cdef jacobian_function get_jacobian_function(int transform_type, int dim) nogil
-cdef param_to_matrix_function get_param_to_matrix_function(int transform_type, int dim) nogil
+cdef param_to_matrix_function get_param_to_matrix_function(int transform_type,
+                                                           int dim) nogil

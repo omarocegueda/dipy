@@ -32,8 +32,6 @@ def estimate_param_scales(transform_type, dim, samples):
         max_shift_sq = sq_norms.max()
         sel = np.argmax(sq_norms)
         opt = np.argmax(sq_norms[:(2**dim)])
-        print(">>>>",sq_norms[:(2**dim)], sq_norms[sel], samples[sel], samples[opt])
-        print("argmax param %d: %d"%(i, sel))
         scales[i] = max_shift_sq
 
     scales[scales==0] = scales[scales>0].min()
@@ -45,7 +43,8 @@ class MattesMIMetric(MattesBase):
     def __init__(self, nbins=32, padding=2):
         super(MattesMIMetric, self).__init__(nbins, padding)
 
-    def setup(self, transform, static, moving, static_aff=None, moving_aff=None, smask=None, mmask=None, prealign=None):
+    def setup(self, transform, static, moving, static_aff=None, moving_aff=None,
+              smask=None, mmask=None, prealign=None):
         MattesBase.setup(self, static, moving, smask, mmask)
         self.dim = len(static.shape)
         self.transform = transform_type[transform]
@@ -66,13 +65,15 @@ class MattesMIMetric(MattesBase):
             T = T.dot(self.prealign)
 
         # Warp the moving image
-        self.warped = aff_warp(self.static, self.static_aff, self.moving, self.moving_aff, T).astype(np.float64)
+        self.warped = aff_warp(self.static, self.static_aff, self.moving,
+                               self.moving_aff, T).astype(np.float64)
 
         # Get the warped mask.
         # Note: we should warp mmask with nearest neighbor interpolation instead
-        self.wmask = aff_warp(self.static, self.static_aff, self.mmask, self.moving_aff, T, True).astype(np.int32)
+        self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
+                              self.moving_aff, T, True).astype(np.int32)
 
-        # Compute the gradient of the moving image at the current transform (i.e. warped)
+        # Compute the gradient of the moving image at the current transform
         self.grad_w = np.empty(shape=(self.warped.shape)+(self.dim,))
         for i, grad in enumerate(sp.gradient(self.warped)):
             self.grad_w[..., i] = grad
@@ -80,8 +81,9 @@ class MattesMIMetric(MattesBase):
         # Update the joint and marginal intensity distributions
         self.update_pdfs_dense(self.static, self.warped, self.smask, self.wmask)
         # Compute the gradient of the joint PDF w.r.t. parameters
-        self.update_gradient_dense(xopt, self.transform, self.static, self.warped,
-                                self.static_aff, self.grad_w, self.smask, self.wmask)
+        self.update_gradient_dense(xopt, self.transform, self.static,
+                                   self.warped, self.static_aff, self.grad_w,
+                                   self.smask, self.wmask)
         # Evaluate the mutual information and its gradient
         # The results are in self.metric_val and self.metric_grad
         # ready to be returned from 'distance' and 'gradient'
@@ -149,8 +151,8 @@ class AffineRegistration(object):
         static: array, shape (S, R, C) or (R, C)
             the image to be used as reference during optimization.
         moving: array, shape (S, R, C) or (R, C)
-            the image to be used as "moving" during optimization. It is necessary
-            to pre-align the moving image to ensure its domain
+            the image to be used as "moving" during optimization. It is
+            necessary to pre-align the moving image to ensure its domain
             lies inside the domain of the deformation fields. This is assumed to
             be accomplished by "pre-aligning" the moving image towards the
             static using an affine transformation given by the 'prealign' matrix
@@ -174,7 +176,6 @@ class AffineRegistration(object):
         self.transform_type = transform_type[transform]
         self.nparams = number_of_parameters(self.transform_type, self.dim)
 
-        # If x0 was not provided, assume that a zero parameter vector maps to identity
         if x0 is None:
             x0 = np.empty(self.nparams, dtype=np.float64)
             get_identity_parameters(self.transform_type, self.dim, x0)
@@ -182,11 +183,14 @@ class AffineRegistration(object):
         if prealign is None:
             self.prealign = np.eye(self.dim + 1)
         elif prealign == 'mass':
-            self.prealign = aff_centers_of_mass(static, static_affine, moving, moving_affine)
+            self.prealign = aff_centers_of_mass(static, static_affine, moving,
+                                                moving_affine)
         elif prealign == 'origins':
-            self.prealign = aff_origins(static, static_affine, moving, moving_affine)
+            self.prealign = aff_origins(static, static_affine, moving,
+                                        moving_affine)
         elif prealign == 'centers':
-            self.prealign = aff_geometric_centers(static, static_affine, moving, moving_affine)
+            self.prealign = aff_geometric_centers(static, static_affine, moving,
+                                                  moving_affine)
         #Extract information from the affine matrices to create the scale space
         static_direction, static_spacing = \
             get_direction_and_spacings(static_affine, self.dim)
@@ -211,9 +215,11 @@ class AffineRegistration(object):
         #mask = (static>0).astype(np.int32)
         mask = np.ones_like(static, dtype=np.int32)
         if self.dim == 2:
-            mattes.sample_domain_2d(np.array(static.shape, dtype=np.int32), self.nsamples, self.samples, mask)
+            mattes.sample_domain_2d(np.array(static.shape, dtype=np.int32),
+                                    self.nsamples, self.samples, mask)
         else:
-            mattes.sample_domain_3d(np.array(static.shape, dtype=np.int32), self.nsamples, self.samples, mask)
+            mattes.sample_domain_3d(np.array(static.shape, dtype=np.int32),
+                                    self.nsamples, self.samples, mask)
         # Select the corners
         for i in range(2**self.dim):
             ii = i
@@ -224,13 +230,15 @@ class AffineRegistration(object):
                     self.samples[i,j] = static.shape[j] - 1
                 ii = ii // 2
         if static_affine is not None:
-            self.samples = self.samples.dot(static_affine.transpose()) # now samples are in physical space
+            # map samples' coordinates to physical space
+            self.samples = self.samples.dot(static_affine.transpose())
+
         for i in range(2**self.dim):
             print(">>>",i,self.samples[i])
 
 
-    def optimize(self, static, moving, transform, x0, static_affine=None, moving_affine=None,
-                 smask=None, mmask=None, prealign=None):
+    def optimize(self, static, moving, transform, x0, static_affine=None,
+                 moving_affine=None, smask=None, mmask=None, prealign=None):
         r'''
         Parameters
         ----------
@@ -245,7 +253,8 @@ class AffineRegistration(object):
             If None:
                 Start from identity
         '''
-        self._init_optimizer(static, moving, transform, x0, static_affine, moving_affine, prealign)
+        self._init_optimizer(static, moving, transform, x0, static_affine,
+                             moving_affine, prealign)
         del prealign # now we must refer to self.prealign
 
         # Multi-resolution iterations
@@ -262,14 +271,20 @@ class AffineRegistration(object):
 
         for level in range(self.levels - 1, -1, -1):
             self.current_level = level
-            print('Optimizing level %d [%d iterations maximum]'%(self.current_level, self.level_iters[level]))
+            max_iter = self.level_iters[level]
+            print('Optimizing level %d [max iter: %d]'%(level, max_iter))
 
             # Resample the smooth static image to the shape of this level
             smooth_static = self.static_ss.get_image(level)
             current_static_shape = self.static_ss.get_domain_shape(level)
             current_static_aff = self.static_ss.get_affine(level)
-            current_static = aff_warp(tuple(current_static_shape), current_static_aff, smooth_static, original_static_affine, None, False)
-            current_smask = aff_warp(tuple(current_static_shape), current_static_aff, original_smask, original_static_affine, None, True)
+
+            current_static = aff_warp(tuple(current_static_shape),
+                                      current_static_aff, smooth_static,
+                                      original_static_affine, None, False)
+            current_smask = aff_warp(tuple(current_static_shape),
+                                     current_static_aff, original_smask,
+                                     original_static_affine, None, True)
 
             # The moving image is full resolution
             current_moving_aff = original_moving_affine
@@ -277,15 +292,19 @@ class AffineRegistration(object):
             current_mmask = original_mmask
 
             # Prepare the metric for iterations at this resolution
-            self.metric.setup(transform, current_static, current_moving, current_static_aff, current_moving_aff, current_smask, current_mmask, self.prealign)
-            scales = estimate_param_scales(self.transform_type, self.dim, self.samples)
+            self.metric.setup(transform, current_static, current_moving,
+                              current_static_aff, current_moving_aff,
+                              current_smask, current_mmask, self.prealign)
+            scales = estimate_param_scales(self.transform_type, self.dim,
+                                           self.samples)
             self.metric.param_scales = scales
 
             #optimize this level
             if self.options is None:
-                self.options = {'maxiter': self.level_iters[self.current_level]}
+                self.options = {'maxiter': max_iter}
 
-            opt = Optimizer(self.metric.value_and_gradient, self.x0, method=self.method, jac = True,
+            opt = Optimizer(self.metric.value_and_gradient, self.x0,
+                            method=self.method, jac = True,
                             options=self.options, evolution=self.evolution)
 
             # Update prealign matrix with optimal parameters
