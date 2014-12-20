@@ -247,9 +247,7 @@ def get_composite_matrix(int[:] ttypes, int dim, double[:] theta, double[:,:] T)
         q = _number_of_parameters(t, dim)
         tmp[:q] = theta[p:(p + q)]
         get_param_to_matrix_function(t, dim)(tmp, A)
-        A = np.dot(A,T)
-        for j in range(dim+1):
-            T[j,:] = A[j,:]
+        _dot_prod(A, T, T)
         p += q
 
 
@@ -286,7 +284,7 @@ def get_composite_jacobian(int[:] ttypes, int dim, double[:] theta, double[:] x,
         ttmp[:q] = theta[p:(p + q)]
         get_param_to_matrix_function(t, dim)(ttmp, A)
         if p > 0:
-            J[:dim,:p] = np.dot(A[:dim, :dim], J[:dim, :p])
+            _dot_prod(A[:dim, :dim], J[:dim, :p], J)
         get_jacobian_function(t, dim)(ttmp, y, Jtmp)
         J[:dim,p:(p+q)] = Jtmp[:dim, :q]
         y = np.dot(A, y)
@@ -784,7 +782,7 @@ cdef int _scaling_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil
     J : array, shape(3, 1)
         the buffer in which to write the Jacobian
     """
-    J[0,0], J[1,0], J[2,0]= x[0], x[1], x[3]
+    J[0,0], J[1,0], J[2,0]= x[0], x[1], x[2]
     # This Jacobian depends on x (it's not constant): return 0
     return 0
 
@@ -861,12 +859,12 @@ cdef int _affine_jacobian_2d(double[:] theta, double[:] x, double[:,:] J) nogil:
     J : array, shape(2, 6)
         the buffer in which to write the Jacobian
     """
-    J[0,:] = 0
-    J[1,:] = 0
+    J[0,:6] = 0
+    J[1,:6] = 0
 
-    J[0, :2] = x[:]
+    J[0, :2] = x[:2]
     J[0, 2] = 1
-    J[1, 3:5] = x[:]
+    J[1, 3:5] = x[:2]
     J[1, 5] = 1
     # This Jacobian depends on x (it's not constant): return 0
     return 0
@@ -911,12 +909,33 @@ cdef int _affine_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
         cnp.npy_intp j
 
     for j in range(3):
-        J[j,:] = 0
-    J[0, :3] = x[:]
+        J[j,:12] = 0
+    J[0, :3] = x[:3]
     J[0, 3] = 1
-    J[1, 4:7] = x[:]
+    J[1, 4:7] = x[:3]
     J[1, 7] = 1
-    J[2, 8:11] = x[:]
+    J[2, 8:11] = x[:3]
     J[2, 11] = 1
     # This Jacobian depends on x (it's not constant): return 0
     return 0
+
+
+
+cdef void _dot_prod(double[:,:] A, double[:,:] B, double[:,:] C):
+    cdef:
+        int r = A.shape[0]
+        int c = B.shape[1]
+        int m = A.shape[1]
+        double s
+        double[:,:] tmp = np.empty(shape=(r, c), dtype=np.float64)
+    with nogil:
+        for i in range(r):
+            for j in range(c):
+                s = 0
+                for k in range(m):
+                    s += A[i, k] * B[k, j]
+                tmp[i, j] = s
+
+        for i in range(r):
+            for j in range(c):
+                C[i, j] = tmp[i, j]

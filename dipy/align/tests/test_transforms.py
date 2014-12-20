@@ -23,7 +23,8 @@ def test_number_of_parameters():
 
 def test_number_of_composite_parameters():
     transforms = transform_type.keys()
-    sizes = [0, 1, 1, 3, 3, 3, 4, 4, 4, 5]
+    # Generate composite transforms of different sizes
+    sizes = [0] + (range(1,1+len(transforms)) * 10)
     for dim in [2, 3]:
         for s in sizes:
             subset = np.random.choice(transforms, s)
@@ -205,7 +206,7 @@ def test_get_identity_parameters():
 
 def test_get_composite_identity():
     transforms = transform_type.keys()
-    sizes = [0, 1, 1, 3, 3, 3, 4, 4, 4, 5]
+    sizes = [0] + (range(1,1+len(transforms)) * 10)
     for dim in [2, 3]:
         for s in sizes:
             subset = np.random.choice(transforms, s)
@@ -220,46 +221,124 @@ def test_get_composite_identity():
             assert_equal(actual, expected)
 
 
-def test_eval_jacobian_function_2d():
-    # Test translation Jacobian 2D
-    ttype = transform_type['TRANSLATION']
-    dim = 2
-    h = 1e-4
-    n = 2
-    nsamples = 10
-    expected = np.empty((dim, n))
-    actual = np.empty((dim, n))
-    theta = np.random.rand(n)
-    T = np.ndarray((dim+1, dim+1))
-    param_to_matrix(ttype, dim, theta, T)
+def test_eval_jacobian_function():
+    r""" Compare the analytical Jacobians with their numerical approximations
+    """
+    transforms = transform_type.keys()
+    h = 1e-8
+    nsamples = 50
 
-    for j in range(nsamples):
-        x = np.random.rand(dim+1)
-        x[dim] = 1
-        eval_jacobian_function(ttype, dim, theta, x, actual)
+    for dim in [2, 3]:
+        for transform in transforms:
+            ttype = transform_type[transform]
+            n = number_of_parameters(ttype, dim)
 
-        # Approximate with finite differences
-        for i in range(n):
-            dtheta = theta.copy()
-            dtheta[i] += h
-            dT = np.empty_like(T)
-            param_to_matrix(ttype, dim, dtheta, dT)
-            g = (dT - T).dot(x) / h
-            expected[:,i] = g[:dim]
+            expected = np.empty((dim, n))
+            actual = np.empty((dim, n))
+            theta = np.random.rand(n)
+            T = np.ndarray((dim+1, dim+1))
+            param_to_matrix(ttype, dim, theta, T)
 
-        assert_array_almost_equal(actual, expected, decimal=5)
-        print(expected, actual)
+            for j in range(nsamples):
+                x = 255 * (np.random.rand(dim+1) - 0.5)
+                x[dim] = 1
+                eval_jacobian_function(ttype, dim, theta, x, actual)
+
+                # Approximate with finite differences
+                for i in range(n):
+                    dtheta = theta.copy()
+                    dtheta[i] += h
+                    dT = np.empty_like(T)
+                    param_to_matrix(ttype, dim, dtheta, dT)
+                    g = (dT - T).dot(x) / h
+                    expected[:,i] = g[:dim]
+
+                assert_array_almost_equal(actual, expected, decimal=5)
+
+
+def test_get_composite_matrix():
+    transforms = transform_type.keys()
+    # Generate composite transforms of different sizes
+    sizes = [0] + (range(1,1+len(transforms)) * 10)
+    for dim in [2, 3]:
+        for s in sizes:
+            subset = np.random.choice(transforms, s)
+            ttypes = np.array([transform_type[t] for t in subset], dtype=np.int32)
+            n = number_of_composite_parameters(ttypes, dim)
+            theta = np.empty(n)
+
+            expected = np.eye(dim+1)
+            # Generate random parameters for the composite transform
+            p = 0
+            for j in range(len(ttypes)):
+                q = number_of_parameters(ttypes[j], dim)
+                th = np.random.rand(q)
+                theta[p:(p+q)] = th[:q]
+                A = np.empty_like(expected)
+                param_to_matrix(ttypes[j], dim, th, A)
+                expected = A.dot(expected)
+                p += q
+
+            actual = np.empty_like(expected)
+            get_composite_matrix(ttypes, dim, theta, actual)
+            assert_array_almost_equal(actual, expected)
+
 
 def test_get_composite_jacobian():
-    pass
+    transforms = transform_type.keys()
+    h = 1e-8
+    nsamples = 50
+    # Generate composite transforms of different sizes
+    sizes = [0] + (range(1,1+len(transforms)) * 10)
+    for dim in [2, 3]:
+        for s in sizes:
+            subset = np.random.choice(transforms, s)
+            ttypes = np.array([transform_type[t] for t in subset], dtype=np.int32)
+            n = number_of_composite_parameters(ttypes, dim)
+            theta = np.empty(n)
+
+            # Generate random parameters for the composite transform
+            p = 0
+            for j in range(len(ttypes)):
+                q = number_of_parameters(ttypes[j], dim)
+                th = np.random.rand(q)
+                theta[p:(p+q)] = th[:q]
+                p += q
+
+            T = np.empty((dim + 1, dim + 1))
+            get_composite_matrix(ttypes, dim, theta, T)
+
+            # Composite transform is ready, compare against numerical approx.
+            expected = np.empty((dim, n))
+            actual = np.empty((dim, n))
+            for j in range(nsamples):
+                x = 255 * (np.random.rand(dim+1) - 0.5)
+                x[dim] = 1
+
+                # Compute the analytical Jacobian (implementation under test)
+                get_composite_jacobian(ttypes, dim, theta, x, actual)
+
+                # Approximate with finite differences
+                for i in range(n):
+                    dtheta = theta.copy()
+                    dtheta[i] += h
+                    dT = np.empty_like(T)
+                    get_composite_matrix(ttypes, dim, dtheta, dT)
+                    g = (dT - T).dot(x) / h
+                    expected[:,i] = g[:dim]
+
+                assert_array_almost_equal(actual, expected, decimal=5)
+
+
 
 
 if __name__=='__main__':
     test_number_of_parameters()
     test_number_of_composite_parameters()
+    test_eval_jacobian_function()
     test_param_to_matrix_2d()
     test_param_to_matrix_3d()
     test_get_identity_parameters()
     test_get_composite_identity()
-    test_eval_jacobian_function_2d()
+    test_get_composite_matrix()
     test_get_composite_jacobian()
