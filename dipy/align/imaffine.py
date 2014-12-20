@@ -18,7 +18,7 @@ def estimate_param_scales(transform_type, dim, samples):
     nsamples = samples.shape[0]
     epsilon = 0.01
 
-    n = number_of_parameters[transform_type, dim]
+    n = number_of_parameters(transform_type, dim)
     theta = np.empty(n)
     T = np.ndarray((dim + 1, dim + 1))
 
@@ -172,7 +172,7 @@ class AffineRegistration(object):
         """
         self.dim = len(static.shape)
         self.transform_type = transform_type[transform]
-        self.nparams = number_of_parameters[(self.transform_type, self.dim)]
+        self.nparams = number_of_parameters(self.transform_type, self.dim)
 
         # If x0 was not provided, assume that a zero parameter vector maps to identity
         if x0 is None:
