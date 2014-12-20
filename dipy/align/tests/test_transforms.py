@@ -220,9 +220,35 @@ def test_get_composite_identity():
             assert_equal(actual, expected)
 
 
-def test_eval_jacobian_function():
-    pass
+def test_eval_jacobian_function_2d():
+    # Test translation Jacobian 2D
+    ttype = transform_type['TRANSLATION']
+    dim = 2
+    h = 1e-4
+    n = 2
+    nsamples = 10
+    expected = np.empty((dim, n))
+    actual = np.empty((dim, n))
+    theta = np.random.rand(n)
+    T = np.ndarray((dim+1, dim+1))
+    param_to_matrix(ttype, dim, theta, T)
 
+    for j in range(nsamples):
+        x = np.random.rand(dim+1)
+        x[dim] = 1
+        eval_jacobian_function(ttype, dim, theta, x, actual)
+
+        # Approximate with finite differences
+        for i in range(n):
+            dtheta = theta.copy()
+            dtheta[i] += h
+            dT = np.empty_like(T)
+            param_to_matrix(ttype, dim, dtheta, dT)
+            g = (dT - T).dot(x) / h
+            expected[:,i] = g[:dim]
+
+        assert_array_almost_equal(actual, expected, decimal=5)
+        print(expected, actual)
 
 def test_get_composite_jacobian():
     pass
@@ -235,5 +261,5 @@ if __name__=='__main__':
     test_param_to_matrix_3d()
     test_get_identity_parameters()
     test_get_composite_identity()
-    test_eval_jacobian_function()
+    test_eval_jacobian_function_2d()
     test_get_composite_jacobian()
