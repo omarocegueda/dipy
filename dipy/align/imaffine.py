@@ -28,7 +28,12 @@ def estimate_param_scales(transform_type, dim, samples):
         theta[i] += epsilon
         param_to_matrix(transform_type, dim, theta, T)
         transformed = samples.dot(T.transpose())
-        max_shift_sq = np.sum((transformed - samples)**2, 1).max()
+        sq_norms = np.sum((transformed - samples)**2, 1)
+        max_shift_sq = sq_norms.max()
+        sel = np.argmax(sq_norms)
+        opt = np.argmax(sq_norms[:(2**dim)])
+        print(">>>>",sq_norms[:(2**dim)], sq_norms[sel], samples[sel], samples[opt])
+        print("argmax param %d: %d"%(i, sel))
         scales[i] = max_shift_sq
 
     scales[scales==0] = scales[scales>0].min()
@@ -209,8 +214,19 @@ class AffineRegistration(object):
             mattes.sample_domain_2d(np.array(static.shape, dtype=np.int32), self.nsamples, self.samples, mask)
         else:
             mattes.sample_domain_3d(np.array(static.shape, dtype=np.int32), self.nsamples, self.samples, mask)
+        # Select the corners
+        for i in range(2**self.dim):
+            ii = i
+            for j in range(self.dim):
+                if ii%2 == 0:
+                    self.samples[i,j] = 0
+                else:
+                    self.samples[i,j] = static.shape[j] - 1
+                ii = ii // 2
         if static_affine is not None:
             self.samples = self.samples.dot(static_affine.transpose()) # now samples are in physical space
+        for i in range(2**self.dim):
+            print(">>>",i,self.samples[i])
 
 
     def optimize(self, static, moving, transform, x0, static_affine=None, moving_affine=None,
