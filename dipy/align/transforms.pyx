@@ -234,17 +234,22 @@ def get_composite_matrix(int[:] ttypes, int dim, double[:] theta, double[:,:] T)
     cdef:
         double[:,:] A = np.empty(shape = (dim+1, dim+1), dtype=np.float64)
         double[:] tmp = np.empty_like(theta)
-        int i, m, t, p
+        int i, j, m, t, p
 
+    # THERE MUST BE A MORE EFFICIENT WAY OF DOING THIS...
     p = 0
     m = ttypes.shape[0]
-    T = np.eye(dim + 1)
+    T[:,:] = 0
+    for i in range(dim + 1):
+        T[i,i] = 1
     for i in range(m):
         t = ttypes[i]
         q = _number_of_parameters(t, dim)
         tmp[:q] = theta[p:(p + q)]
         get_param_to_matrix_function(t, dim)(tmp, A)
-        T = np.dot(A,T)
+        A = np.dot(A,T)
+        for j in range(dim+1):
+            T[j,:] = A[j,:]
         p += q
 
 
@@ -527,11 +532,10 @@ cdef void _rotation_matrix_3d(double[:] theta, double[:,:] R) nogil:
         double sc = sin(theta[2])
         double cc = cos(theta[2])
 
-    with nogil:
-        R[0,0], R[0,1], R[0,2], R[0, 3] = cc*cb-sc*sa*sb, -sc*ca, cc*sb+sc*sa*cb, 0
-        R[1,0], R[1,1], R[1,2], R[1, 3] = sc*cb+cc*sa*sb, cc*ca, sc*sb-cc*sa*cb, 0
-        R[2,0], R[2,1], R[2,2], R[2, 3] = -ca*sb, sa, ca*cb, 0
-        R[3,0], R[3,1], R[3,2], R[3, 3] = 0, 0, 0, 1
+    R[0,0], R[0,1], R[0,2], R[0, 3] = cc*cb-sc*sa*sb, -sc*ca, cc*sb+sc*sa*cb, 0
+    R[1,0], R[1,1], R[1,2], R[1, 3] = sc*cb+cc*sa*sb, cc*ca, sc*sb-cc*sa*cb, 0
+    R[2,0], R[2,1], R[2,2], R[2, 3] = -ca*sb, sa, ca*cb, 0
+    R[3,0], R[3,1], R[3,2], R[3, 3] = 0, 0, 0, 1
 
 
 cdef int _rotation_jacobian_3d(double[:] theta, double[:] x, double[:,:] J) nogil:
