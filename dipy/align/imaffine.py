@@ -14,37 +14,55 @@ from dipy.align.transforms import (transform_type,
 from dipy.align.imwarp import (get_direction_and_spacings,
                                ScaleSpace)
 
-def estimate_param_scales(transform_type, dim, samples):
-    nsamples = samples.shape[0]
-    epsilon = 0.01
-
-    n = number_of_parameters(transform_type, dim)
-    theta = np.empty(n)
-    T = np.ndarray((dim + 1, dim + 1))
-
-    scales = np.zeros(n)
-    for i in range(n):
-        get_identity_parameters(transform_type, dim, theta)
-        theta[i] += epsilon
-        param_to_matrix(transform_type, dim, theta, T)
-        transformed = samples.dot(T.transpose())
-        sq_norms = np.sum((transformed - samples)**2, 1)
-        max_shift_sq = sq_norms.max()
-        sel = np.argmax(sq_norms)
-        opt = np.argmax(sq_norms[:(2**dim)])
-        scales[i] = max_shift_sq
-
-    scales[scales==0] = scales[scales>0].min()
-    scales /= (epsilon*epsilon)
-    return scales
-
-
 class MattesMIMetric(MattesBase):
-    def __init__(self, nbins=32, padding=2):
-        super(MattesMIMetric, self).__init__(nbins, padding)
+    def __init__(self, nbins=32):
+        r""" Initializes an instance of the Mattes MI metric
+
+        Parameters
+        ----------
+        nbins : int
+            the number of bins to be used for computing the intensity histograms
+        """
+        super(MattesMIMetric, self).__init__(nbins)
 
     def setup(self, transform, static, moving, static_aff=None, moving_aff=None,
               smask=None, mmask=None, prealign=None):
+        r""" Prepares the metric to compute intensity densities and gradients
+
+        The histograms will be setup to compute probability densities of
+        intensities within the minimum and maximum values of static and moving
+        within the given masks
+
+        Parameters
+        ----------
+        transform : string
+            the name of the transform with respect to whose parameters the
+            gradients will be computed
+        static : array, shape (S, R, C) or (R, C)
+            static image
+        moving : array, shape (S', R', C') or (R', C')
+            moving image
+        static_affine : array (dim+1, dim+1)
+            the grid-to-space transform of the static image
+        moving_affine : array (dim+1, dim+1)
+            the grid-to-space transform of the moving image
+        smask : array, shape (S, R, C) or (R, C)
+            the mask indicating the voxels of interest within the static image.
+            If None, ones_like(smask) will be used as mask (all voxels will be
+            taken).
+        mmask : array, shape (S', R', C') or (R', C')
+            the mask indicating the voxels of interest within the moving image
+            If None, ones_like(smask) will be used as mask (all voxels will be
+            taken).
+        prealign : array, shape (dim+1, dim+1)
+            the pre-aligning matrix (an affine transform) that roughly aligns
+            the moving image towards the static image. If None, no pre-alignment
+            is performed. If a pre-alignment matrix is available, it is
+            recommended to directly provide the transform to the MattesMIMetric
+            instead of manually warping the moving image and provide None or
+            identity as prealign. This way, the metric avoids performing more
+            than one interpolation.
+        """
         MattesBase.setup(self, static, moving, smask, mmask)
         self.dim = len(static.shape)
         self.transform = transform_type[transform]
@@ -58,6 +76,20 @@ class MattesMIMetric(MattesBase):
         self.param_scales = None
 
     def _update_dense(self, xopt):
+        r""" Updates the marginal and joint distributions and the joint gradient
+
+        The distributions and the gradient of the joint distribution are
+        updated according to the static and warped images. The warped image
+        is precisely the moving image after transforming it by the transform
+        defined by the xopt parameters.
+
+        Parameters
+        ----------
+        xopt : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+        """
         # Get the matrix associated to the xopt parameter vector
         T = np.empty(shape=(self.dim + 1, self.dim + 1))
         param_to_matrix(self.transform, self.dim, xopt, T)
@@ -90,20 +122,47 @@ class MattesMIMetric(MattesBase):
         self.update_mi_metric(True)
 
     def distance(self, xopt):
+        r""" Numeric value of the metric evaluated at the given parameters
+        Parameters
+        ----------
+        xopt : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+        """
         self._update_dense(xopt)
         return self.metric_val
 
     def gradient(self, xopt):
+        r""" Numeric value of the metric's gradient at the given parameters
+        Parameters
+        ----------
+        xopt : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+        """
         self._update_dense(xopt)
         if self.param_scales is not None:
-            self.metric_grad /= self.param_scales
-        return self.metric_grad
+            return self.metric_grad / self.param_scales
+        else:
+            return self.metric_grad
 
     def value_and_gradient(self, xopt):
+        r""" Numeric value of the metric and its gradient at the given parameter
+
+        Parameters
+        ----------
+        xopt : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+        """
         self._update_dense(xopt)
         if self.param_scales is not None:
-            self.metric_grad /= self.param_scales
-        return self.metric_val, self.metric_grad
+            return self.metric_val, self.metric_grad / self.param_scales
+        else:
+            return self.metric_val, self.metric_grad
 
 
 class AffineRegistration(object):
@@ -112,10 +171,26 @@ class AffineRegistration(object):
                  level_iters=None,
                  opt_tol=1e-5,
                  ss_sigma_factor=1.0,
-                 bounds=None,
-                 verbose=True,
-                 options=None,
-                 evolution=False):
+                 options=None):
+        r""" Initializes an instance of the AffineRegistration class
+
+        Parameters
+        ----------
+        metric : object
+            an instance of a metric
+        level_iters : list
+            the number of iterations at each level of the Gaussian pyramid.
+            level_iters[0] corresponds to the finest level, level_iters[n-1] the
+            coarsest, where n is the length of the list
+        opt_tol : float
+            tolerance parameter for the optimizer
+        ss_sigma_factor : float
+            parameter of the scale-space smoothing kernel. For example, the
+            std. dev. of the kernel will be factor*(2^i) in the isotropic case
+            where i = 0, 1, ..., n_scales is the scale
+        options : None or dict,
+            extra optimization options.
+        """
 
         self.metric = metric
 
@@ -132,10 +207,7 @@ class AffineRegistration(object):
         self.opt_tol = opt_tol
         self.ss_sigma_factor = ss_sigma_factor
 
-        self.bounds = bounds
-        self.verbose = verbose
         self.options = options
-        self.evolution = evolution
         self.method = 'CG'
 
 
@@ -208,34 +280,6 @@ class AffineRegistration(object):
                                     static_spacing, self.ss_sigma_factor,
                                     False)
 
-        # Sample the static domain
-        self.nsamples = 1000
-        self.samples = np.empty((self.nsamples, self.dim + 1))
-        self.samples[:,self.dim] = 1
-        #mask = (static>0).astype(np.int32)
-        mask = np.ones_like(static, dtype=np.int32)
-        if self.dim == 2:
-            mattes.sample_domain_2d(np.array(static.shape, dtype=np.int32),
-                                    self.nsamples, self.samples, mask)
-        else:
-            mattes.sample_domain_3d(np.array(static.shape, dtype=np.int32),
-                                    self.nsamples, self.samples, mask)
-        # Select the corners
-        for i in range(2**self.dim):
-            ii = i
-            for j in range(self.dim):
-                if ii%2 == 0:
-                    self.samples[i,j] = 0
-                else:
-                    self.samples[i,j] = static.shape[j] - 1
-                ii = ii // 2
-        if static_affine is not None:
-            # map samples' coordinates to physical space
-            self.samples = self.samples.dot(static_affine.transpose())
-
-        for i in range(2**self.dim):
-            print(">>>",i,self.samples[i])
-
 
     def optimize(self, static, moving, transform, x0, static_affine=None,
                  moving_affine=None, smask=None, mmask=None, prealign=None):
@@ -296,7 +340,8 @@ class AffineRegistration(object):
                               current_static_aff, current_moving_aff,
                               current_smask, current_mmask, self.prealign)
             scales = estimate_param_scales(self.transform_type, self.dim,
-                                           self.samples)
+                                           current_static.shape,
+                                           current_static_aff)
             self.metric.param_scales = scales
 
             #optimize this level
@@ -305,7 +350,7 @@ class AffineRegistration(object):
 
             opt = Optimizer(self.metric.value_and_gradient, self.x0,
                             method=self.method, jac = True,
-                            options=self.options, evolution=self.evolution)
+                            options=self.options)
 
             # Update prealign matrix with optimal parameters
             T = np.empty(shape=(self.dim + 1, self.dim + 1))
@@ -318,6 +363,69 @@ class AffineRegistration(object):
             print("Metric value: %f"%(self.metric.metric_val,))
 
         return self.prealign
+
+
+def estimate_param_scales(transform_type, dim, domain_shape, domain_affine):
+    r""" Estimate the parameter scales of the given affine transform
+
+    If we vary only one of the parameters of the parameter vector p of the
+    given parametric transformation T (where p corresponds to the parameters of
+    the identity transform), this defines a trajectory T(p[i]; x0), which
+    transforms an initial point x0 according to the parameter p[i]. The
+    magnitude of the tangent vector of that trajectory is a measure of its
+    'velocity', which tells us how 'sensitive' the transformation is to each of
+    its parameters at the specific point x0. Thus, we define the 'scale' of a
+    parameter as the maximum, over all possible starting points x0, of the
+    aforementioned tangent vector's norm.
+
+    Parameters
+    ----------
+    transform_type : int
+        the type of the transformation (use transform_type dictionary from
+        the transforms module to map transformation name to int)
+    dim : int (either 2 or 3)
+        the domain dimension of the transformation (either 2 or 3)
+    domain_shape : array, shape (dim,)
+        the shape of the grid on which the transform is applied
+    domain_affine : array, shape (dim + 1, dim + 1)
+        the grid-to-space transform associated to the grid of shape domain_shape
+    """
+    h = 0.01
+    n = number_of_parameters(transform_type, dim)
+    theta = np.empty(n)
+    X = np.empty((2 ** dim, dim + 1)) # All 2^dim corners of the grid
+    T = np.ndarray((dim + 1, dim + 1))
+
+    # Generate all corners of the given domain
+    X[:, dim] = 1 # Homogeneous coordinate
+    for i in range(2 ** dim):
+        ii = i
+        for j in range(dim):
+            if (ii % 2) == 0:
+                X[i, j] = 0
+            else:
+                X[i, j] = domain_shape[j] - 1
+            ii = ii // 2
+
+    # Transform grid points to physical space
+    if domain_affine is not None:
+        X = X.dot(domain_affine.transpose())
+
+    # Compute the scale of each parameter
+    scales = np.zeros(n)
+    for i in range(n):
+        get_identity_parameters(transform_type, dim, theta)
+        theta[i] += h
+        param_to_matrix(transform_type, dim, theta, T)
+        transformed = X.dot(T.transpose())
+        sq_norms = np.sum((transformed - X) ** 2, 1)
+        max_shift_sq = sq_norms.max()
+        scales[i] = np.sqrt(max_shift_sq)
+
+    # Avoid zero scales to prevent division by zero
+    scales[scales == 0] = scales[scales > 0].min()
+    scales /= h
+    return scales
 
 
 def aff_warp(static, static_affine, moving, moving_affine, transform, nn=False):
