@@ -23,7 +23,7 @@ cdef extern from "dpy_math.h" nogil:
     double log(double)
 
 class MattesBase(object):
-    def __init__(self, nbins, padding):
+    def __init__(self, nbins):
         r""" MattesBase
         Base class for the Mattes' Mutual Information metric
 
@@ -40,12 +40,16 @@ class MattesBase(object):
         nbins : int
             the number of bins of the joint and margianl probability density
             functions (the actual number of bins of the joint PDF is nbins^2)
-        padding : int
-            number of bins used as padding (the total bins used for padding at
-            both sides of the histogram is actually 2*padding)
         """
         self.nbins = nbins
-        self.padding = padding
+        # Since the kernel used to compute the Parzen histogram covers more than
+        # one bin, we need to add extra bins to both sides of the histogram
+        # to account for the contributions of the minimum and maximum
+        # intensities. Padding is the number of extra bins used at each side
+        # of the histogram (a total of 2 * padding extra bins). Since the
+        # support of the cubic spline is 5 bins (the center plus 2 bins at each
+        # side) we need a padding of 2, in this case.
+        self.padding = 2
 
     def setup(self, static, moving, smask=None, mmask=None):
         r""" Compute histogram settings to store PDF of input images
@@ -76,8 +80,8 @@ class MattesBase(object):
         self.mmin = np.min(moving[mmask!=0])
         self.mmax = np.max(moving[mmask!=0])
 
-        self.sdelta = (self.smax - self.smin)/(self.nbins - self.padding)
-        self.mdelta = (self.mmax - self.mmin)/(self.nbins - self.padding)
+        self.sdelta = (self.smax - self.smin)/(self.nbins - 2 * self.padding)
+        self.mdelta = (self.mmax - self.mmin)/(self.nbins - 2 * self.padding)
         self.smin = self.smin/self.sdelta - self.padding
         self.mmin = self.mmin/self.sdelta - self.padding
 
@@ -89,7 +93,63 @@ class MattesBase(object):
         self.mmarginal = np.ndarray(shape = (self.nbins,), dtype = np.float64)
 
 
-    def update_pdfs_dense(self, static, moving, smask, mmask):
+    def bin_normalize_static(self, x):
+        r""" Normalizes intensity x to the range covered by the static histogram
+
+        If the input intensity is in [self.smin, self.smax] then the normalized
+        intensity will be in [self.padding, self.nbins - 1 - self.padding]
+
+        Parameters
+        ----------
+        x : float
+            the intensity to be normalized
+
+        Returns
+        -------
+        xnorm : float
+            normalized intensity to the range covered by the static histogram
+        """
+        return _bin_normalize(x, self.smin, self.sdelta)
+
+
+    def bin_normalize_moving(self, x):
+        r""" Normalizes intensity x to the range covered by the moving histogram
+
+        If the input intensity is in [self.mmin, self.mmax] then the normalized
+        intensity will be in [self.padding, self.nbins - 1 - self.padding]
+
+        Parameters
+        ----------
+        x : float
+            the intensity to be normalized
+
+        Returns
+        -------
+        xnorm : float
+            normalized intensity to the range covered by the moving histogram
+        """
+        return _bin_normalize(x, self.mmin, self.mdelta)
+
+
+    def bin_index(self, xnorm):
+        r""" Bin index associated to the given normalized intensity
+
+        The return value is an integer in [padding, nbins - 1 - padding]
+
+        Parameters
+        ----------
+        xnorm : float
+            intensity value normalized to the range covered by the histogram
+
+        Returns
+        -------
+        bin : int
+            the bin index associated to the given normalized intensity
+        """
+        return _bin_index(xnorm, self.nbins, self.padding)
+
+
+    def update_pdfs_dense(self, static, moving, smask=None, mmask=None):
         r''' Computes the Joint Probability Density Function of of two images
 
         Parameters
@@ -100,10 +160,12 @@ class MattesBase(object):
             moving image
         smask: array, shape (S, R, C)
             mask of static object being registered (a binary array with 1's
-            inside the object of interest and 0's along the background)
+            inside the object of interest and 0's along the background).
+            If None, ones_like(static) is used as mask.
         mmask: array, shape (S, R, C)
             mask of moving object being registered (a binary array with 1's
-            inside the object of interest and 0's along the background)
+            inside the object of interest and 0's along the background).
+            If None, ones_like(moving) is used as mask.
         '''
         dim = len(static.shape)
         if dim == 2:
@@ -132,9 +194,9 @@ class MattesBase(object):
             sampled intensities from the moving image at sampled_points
         '''
         energy = _compute_pdfs_sparse(sval, mval, self.smin, self.sdelta,
-                                   self.nbins, self.mmin, self.mdelta,
-                                   self.padding, self.joint, self.smarginal,
-                                   self.mmarginal)
+                                      self.mmin, self.mdelta, self.nbins,
+                                      self.padding, self.joint, self.smarginal,
+                                      self.mmarginal)
 
 
     def update_gradient_dense(self, theta, transform, static, moving,
@@ -296,7 +358,7 @@ cdef inline double _bin_normalize(double x, double mval, double delta) nogil:
 
     The normalized intensity is (from eq(1) ):
 
-    (3) nx = (x - xmin) / delta + padding = x/delta - mval
+    (3) nx = (x - xmin) / delta + padding = x / delta - mval
 
     This means that the observed intensity x must be between
     bins padding and nbins-1-padding, although it may affect bins 0 to nbins-1.
@@ -337,6 +399,24 @@ cdef inline cnp.npy_intp _bin_index(double normalized, int nbins,
     return bin
 
 
+def cubic_spline(double[:] x, double[:] sx):
+    r''' Evaluates the cubic spline at a set of values
+
+    Parameters
+    ----------
+    x : array, shape (n)
+        input values
+    sx : array, shape (n)
+        buffer in which to write the evaluated spline
+    '''
+    cdef:
+        int i
+        int n = x.shape[0]
+    with nogil:
+        for i in range(n):
+            sx[i] =  _cubic_spline(x[i])
+
+
 cdef inline double _cubic_spline(double x) nogil:
     r''' Cubic B-Spline evaluated at x
     See eq. (3) of [1].
@@ -354,6 +434,24 @@ cdef inline double _cubic_spline(double x) nogil:
     elif absx < 2.0:
         return ( 8.0 - 12 * absx + 6.0 * sqrx - sqrx * absx ) / 6.0
     return 0.0
+
+
+def cubic_spline_derivative(double[:] x, double[:] sx):
+    r''' Evaluates the cubic spline derivative at a set of values
+
+    Parameters
+    ----------
+    x : array, shape (n)
+        input values
+    sx : array, shape (n)
+        buffer in which to write the evaluated spline derivative
+    '''
+    cdef:
+        int i
+        int n = x.shape[0]
+    with nogil:
+        for i in range(n):
+            sx[i] =  _cubic_spline_derivative(x[i])
 
 
 cdef inline double _cubic_spline_derivative(double x) nogil:
@@ -446,10 +544,10 @@ cdef _compute_pdfs_dense_2d(double[:,:] static, double[:,:] moving,
                 r = _bin_index(rn, nbins, padding)
                 cn = _bin_normalize(moving[i, j], mmin, mdelta)
                 c = _bin_index(cn, nbins, padding)
-                spline_arg = (c-1) - cn
+                spline_arg = (c-2) - cn
 
                 smarginal[r] += 1
-                for offset in range(-1,3):
+                for offset in range(-2, 3):
                     val = _cubic_spline(spline_arg)
                     joint[r, c + offset] += val
                     sum += val
@@ -537,10 +635,10 @@ cdef _compute_pdfs_dense_3d(double[:,:,:] static, double[:,:,:] moving,
                     r = _bin_index(rn, nbins, padding)
                     cn = _bin_normalize(moving[k, i, j], mmin, mdelta)
                     c = _bin_index(cn, nbins, padding)
-                    spline_arg = (c-1) - cn
+                    spline_arg = (c-2) - cn
 
                     smarginal[r] += 1
-                    for offset in range(-1,3):
+                    for offset in range(-2, 3):
                         val = _cubic_spline(spline_arg)
                         joint[r, c + offset] += val
                         sum += val
@@ -612,10 +710,10 @@ cdef _compute_pdfs_sparse(double[:] sval, double[:] mval, double smin,
             r = _bin_index(rn, nbins, padding)
             cn = _bin_normalize(mval[i], mmin, mdelta)
             c = _bin_index(cn, nbins, padding)
-            spline_arg = (c-1) - cn
+            spline_arg = (c-2) - cn
 
             smarginal[r] += 1
-            for offset in range(-1, 3):
+            for offset in range(-2, 3):
                 val = _cubic_spline(spline_arg)
                 joint[r, c + offset] += val
                 sum += val
@@ -724,9 +822,9 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
                 r = _bin_index(rn, nbins, padding)
                 cn = _bin_normalize(moving[i, j], mmin, mdelta)
                 c = _bin_index(cn, nbins, padding)
-                spline_arg = (c-1) - cn
+                spline_arg = (c-2) - cn
 
-                for offset in range(-1,3):
+                for offset in range(-2, 3):
                     val = _cubic_spline_derivative(spline_arg)
                     for k in range(n):
                         grad_pdf[r, c + offset,k] -= val * prod[k]
@@ -737,7 +835,6 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
                 for j in range(nbins):
                     for k in range(n):
                         grad_pdf[i, j, k] /= (valid_points * mdelta)
-
 
 
 cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
@@ -831,9 +928,9 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
                     r = _bin_index(rn, nbins, padding)
                     cn = _bin_normalize(moving[k, i, j], mmin, mdelta)
                     c = _bin_index(cn, nbins, padding)
-                    spline_arg = (c-1) - cn
+                    spline_arg = (c-2) - cn
 
-                    for offset in range(-1,3):
+                    for offset in range(-2, 3):
                         val = _cubic_spline_derivative(spline_arg)
                         for l in range(n):
                             grad_pdf[r, c + offset,l] -= val * prod[l]
@@ -910,9 +1007,9 @@ cdef _joint_pdf_gradient_sparse_2d(double[:] theta, jacobian_function jacobian,
             r = _bin_index(rn, nbins, padding)
             cn = _bin_normalize(mval[i], mmin, mdelta)
             c = _bin_index(cn, nbins, padding)
-            spline_arg = (c-1) - cn
+            spline_arg = (c-2) - cn
 
-            for offset in range(-1,3):
+            for offset in range(-2, 3):
                 val = _cubic_spline_derivative(spline_arg)
                 for j in range(n):
                     grad_pdf[r, c + offset,j] -= val * prod[j]
@@ -990,13 +1087,9 @@ cdef _joint_pdf_gradient_sparse_3d(double[:] theta, jacobian_function jacobian,
             r = _bin_index(rn, nbins, padding)
             cn = _bin_normalize(mval[i], mmin, mdelta)
             c = _bin_index(cn, nbins, padding)
-            spline_arg = (c-1) - cn
+            spline_arg = (c-2) - cn
 
-            #Sweep the bins affected by a Parzen window centered at (rn, cn)
-            #I think it should be range (-2, 3), but this is how it's
-            #implemented in ANTS (the contribution for bin c-2 would be very
-            #small, though)
-            for offset in range(-1,3):
+            for offset in range(-2, 3):
                 val = _cubic_spline_derivative(spline_arg)
                 for j in range(n):
                     grad_pdf[r, c + offset,j] -= val * prod[j]
