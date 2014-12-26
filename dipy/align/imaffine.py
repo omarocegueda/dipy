@@ -161,6 +161,7 @@ class MattesMIMetric(MattesBase):
         self._update_dense(xopt)
         if self.param_scales is not None:
             return self.metric_val, self.metric_grad / self.param_scales
+            #return self.metric_val, self.metric_grad.copy()
         else:
             return self.metric_val, self.metric_grad
 

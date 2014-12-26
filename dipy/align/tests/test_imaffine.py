@@ -168,11 +168,11 @@ def setup_random_transform_2d(ttype, rfactor):
 
 def test_mattes_mi_registration_2d():
     transforms = transform_type.keys()
-    factors = {'TRANSLATION':5.0,
-               'ROTATION':0.25,
-               'RIGID':0.20,
-               'SCALING':0.1,
-               'AFFINE':0.1}
+    factors = {'TRANSLATION':25.0,
+               'ROTATION':0.35,
+               'RIGID':0.25,
+               'SCALING':0.3,
+               'AFFINE':0.2}
     for transform in transforms:
         factor = factors[transform]
         t = transform_type[transform]
@@ -196,8 +196,8 @@ def test_mattes_mi_registration_2d():
         rt.overlay_images(static, warped)
 
         reduction = 1 - end_sad / start_sad
-
-        assert_equal(reduction > 0.95, True)
+        print("%s>>%f"%(transform, reduction))
+        assert_equal(reduction > 0.99, True)
 
 
 if __name__ == "__main__":
