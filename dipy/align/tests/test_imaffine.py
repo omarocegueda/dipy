@@ -15,6 +15,7 @@ from dipy.align.transforms import (transform_type,
 from dipy.align.imaffine import *
 import dipy.viz.regtools as rt
 import dipy.align.imaffine as imaffine
+from dipy.data import get_data
 
 
 def test_aff_centers_of_mass_3d():
@@ -144,7 +145,7 @@ def test_aff_origins_3d():
 def setup_random_transform_2d(ttype, rfactor):
     np.random.seed(3147702)
     dim = 2
-    fname = 't1_coronal_slice.npy'
+    fname = get_data('t1_coronal_slice')
     moving = np.load(fname)
     moving_aff = np.eye(dim + 1)
     mmask = np.ones_like(moving)
