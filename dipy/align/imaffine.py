@@ -63,7 +63,6 @@ class MattesMIMetric(MattesBase):
             identity as prealign. This way, the metric avoids performing more
             than one interpolation.
         """
-        MattesBase.setup(self, static, moving, smask, mmask)
         self.dim = len(static.shape)
         self.transform = transform_type[transform]
         self.static = np.array(static).astype(np.float64)
@@ -74,6 +73,18 @@ class MattesMIMetric(MattesBase):
         self.mmask = mmask
         self.prealign = prealign
         self.param_scales = None
+
+        T = np.eye(self.dim + 1)
+        if self.prealign is not None:
+            T = T.dot(self.prealign)
+
+        self.warped = aff_warp(self.static, self.static_aff, self.moving,
+                               self.moving_aff, T).astype(np.float64)
+
+        self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
+                              self.moving_aff, T, True).astype(np.int32)
+
+        MattesBase.setup(self, self.static, self.warped, self.smask, self.wmask)
 
     def _update_dense(self, xopt):
         r""" Updates the marginal and joint distributions and the joint gradient
@@ -144,8 +155,7 @@ class MattesMIMetric(MattesBase):
         """
         self._update_dense(xopt)
         if self.param_scales is not None:
-            #return self.metric_grad / self.param_scales
-            return self.metric_grad.copy()
+            return self.metric_grad / self.param_scales
         else:
             return self.metric_grad.copy()
 
@@ -161,8 +171,7 @@ class MattesMIMetric(MattesBase):
         """
         self._update_dense(xopt)
         if self.param_scales is not None:
-            #return self.metric_val, self.metric_grad / self.param_scales
-            return self.metric_val, self.metric_grad.copy()
+            return self.metric_val, self.metric_grad / self.param_scales
         else:
             return self.metric_val, self.metric_grad.copy()
 
@@ -210,7 +219,7 @@ class AffineRegistration(object):
         self.ss_sigma_factor = ss_sigma_factor
 
         self.options = options
-        self.method = 'CG'
+        self.method = 'L-BFGS-B'
 
 
     def _init_optimizer(self, static, moving, transform, x0,
@@ -362,6 +371,12 @@ class AffineRegistration(object):
             # Start next iteration at identity
             get_identity_parameters(self.transform_type, self.dim, self.x0)
 
+            # Update the metric to the current solution
+            self.metric.setup(transform, current_static, current_moving,
+                              current_static_aff, current_moving_aff,
+                              current_smask, current_mmask, self.prealign)
+            self.metric._update_dense(self.x0)
+
             print("Metric value: %f"%(self.metric.metric_val,))
 
         return self.prealign
@@ -378,7 +393,7 @@ def estimate_param_scales(transform_type, dim, domain_shape, domain_affine):
     'velocity', which tells us how 'sensitive' the transformation is to each of
     its parameters at the specific point x0. Thus, we define the 'scale' of a
     parameter as the maximum, over all possible starting points x0, of the
-    aforementioned tangent vector's norm.
+    aforementioned tangent vector's squared norm.
 
     Parameters
     ----------
@@ -422,11 +437,11 @@ def estimate_param_scales(transform_type, dim, domain_shape, domain_affine):
         transformed = X.dot(T.transpose())
         sq_norms = np.sum((transformed - X) ** 2, 1)
         max_shift_sq = sq_norms.max()
-        scales[i] = np.sqrt(max_shift_sq)
+        scales[i] = max_shift_sq
 
     # Avoid zero scales to prevent division by zero
     scales[scales == 0] = scales[scales > 0].min()
-    scales /= h
+    scales /= h * h
     return scales
 
 

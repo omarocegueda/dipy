@@ -83,7 +83,7 @@ class MattesBase(object):
         self.sdelta = (self.smax - self.smin)/(self.nbins - 2 * self.padding)
         self.mdelta = (self.mmax - self.mmin)/(self.nbins - 2 * self.padding)
         self.smin = self.smin/self.sdelta - self.padding
-        self.mmin = self.mmin/self.sdelta - self.padding
+        self.mmin = self.mmin/self.mdelta - self.padding
 
         self.joint_grad = None
         self.metric_grad = None
