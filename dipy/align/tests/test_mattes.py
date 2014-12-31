@@ -54,7 +54,6 @@ def test_mattes_densities_dense():
     # Test pdf dense
     np.random.seed(1246592)
     nbins = 32
-    padding = 2
     nr = 30
     nc = 35
     ns = 20
@@ -69,7 +68,7 @@ def test_mattes_densities_dense():
             static, moving = create_random_image_pair_3d(ns, nr, nc, nvals)
 
         # Initialize
-        mbase = MattesBase(nbins, padding)
+        mbase = MattesBase(nbins)
         mbase.setup(static, moving)
         mbase.update_pdfs_dense(static, moving)
         actual_joint = mbase.joint
@@ -108,7 +107,6 @@ def test_mattes_densities_sparse():
     # Test pdf dense
     np.random.seed(3147702)
     nbins = 32
-    padding = 2
     nr = 30
     nc = 35
     nvals = 50
@@ -119,7 +117,7 @@ def test_mattes_densities_sparse():
     mval = moving.reshape(-1)
 
     # Initialize
-    mbase = MattesBase(nbins, padding)
+    mbase = MattesBase(nbins)
     mbase.setup(static, moving)
     mbase.update_pdfs_sparse(sval, mval)
     actual_joint = mbase.joint
@@ -154,7 +152,5 @@ def test_mattes_densities_sparse():
     assert_array_almost_equal(actual_smarginal, expected_smarginal)
 
 if __name__ == '__main__':
-    create_random_image_pair_2d()
-    create_random_image_pair_3d()
     test_mattes_densities_dense()
     test_mattes_densities_sparse()
