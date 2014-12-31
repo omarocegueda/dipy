@@ -895,7 +895,7 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
         int nrows = static.shape[1]
         int ncols = static.shape[2]
         int n = theta.shape[0]
-        int offset, constant_jacobian=0
+        int offset, valid_points, constant_jacobian=0
         cnp.npy_intp l, k, i, j, r, c
         double rn, cn
         double val, spline_arg
@@ -905,7 +905,7 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
 
     grad_pdf[...] = 0
     with nogil:
-
+        valid_points = 0
         for k in range(nslices):
             for i in range(nrows):
                 for j in range(ncols):
@@ -913,6 +913,7 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
                         continue
                     if mmask is not None and mmask[k, i, j] == 0:
                         continue
+                    valid_points += 1
                     x[0] = _apply_affine_3d_x0(k, i, j, 1, grid_to_space)
                     x[1] = _apply_affine_3d_x1(k, i, j, 1, grid_to_space)
                     x[2] = _apply_affine_3d_x2(k, i, j, 1, grid_to_space)
@@ -936,6 +937,12 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
                         for l in range(n):
                             grad_pdf[r, c + offset,l] -= val * prod[l]
                         spline_arg += 1.0
+
+        if valid_points * mdelta > 0:
+            for i in range(nbins):
+                for j in range(nbins):
+                    for k in range(n):
+                        grad_pdf[i, j, k] /= (valid_points * mdelta)
 
 
 cdef _joint_pdf_gradient_sparse_2d(double[:] theta, jacobian_function jacobian,

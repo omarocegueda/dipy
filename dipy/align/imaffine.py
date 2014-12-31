@@ -171,7 +171,7 @@ class MattesMIMetric(MattesBase):
         """
         self._update_dense(xopt)
         if self.param_scales is not None:
-            return self.metric_val, self.metric_grad / self.param_scales
+            return self.metric_val, self.metric_grad.copy()
         else:
             return self.metric_val, self.metric_grad.copy()
 
@@ -219,7 +219,7 @@ class AffineRegistration(object):
         self.ss_sigma_factor = ss_sigma_factor
 
         self.options = options
-        self.method = 'L-BFGS-B'
+        self.method = 'CG'
 
 
     def _init_optimizer(self, static, moving, transform, x0,
@@ -359,8 +359,8 @@ class AffineRegistration(object):
 
             #optimize this level
             if self.options is None:
-                self.options = {'maxiter': max_iter}
-
+                self.options = {'gtol':1e-4, 'maxiter': max_iter, 'disp':True}
+            print("Options:",self.options)
             opt = Optimizer(self.metric.value_and_gradient, self.x0,
                             method=self.method, jac = True,
                             options=self.options)
