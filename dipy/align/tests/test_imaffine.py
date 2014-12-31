@@ -60,7 +60,7 @@ def test_aff_centers_of_mass_3d():
             expected[:3, 3] = c_moving - c_static
 
             # Implementation under test
-            actual = imaffine.aff_centers_of_mass_3d(static, static_affine, moving, moving_affine)
+            actual = imaffine.aff_centers_of_mass(static, static_affine, moving, moving_affine)
             assert_array_almost_equal(actual, expected)
 
 
@@ -100,7 +100,7 @@ def test_aff_geometric_centers_3d():
                     expected[:3, 3] = c_moving - c_static
 
                     # Implementation under test
-                    actual = imaffine.aff_geometric_centers_3d(static, static_affine, moving, moving_affine)
+                    actual = imaffine.aff_geometric_centers(static, static_affine, moving, moving_affine)
                     assert_array_almost_equal(actual, expected)
 
 
@@ -138,7 +138,7 @@ def test_aff_origins_3d():
                     expected[:3, 3] = c_moving - c_static
 
                     # Implementation under test
-                    actual = imaffine.aff_origins_3d(static, static_affine, moving, moving_affine)
+                    actual = imaffine.aff_origins(static, static_affine, moving, moving_affine)
                     assert_array_almost_equal(actual, expected)
 
 
