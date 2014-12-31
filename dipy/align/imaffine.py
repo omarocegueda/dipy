@@ -107,6 +107,11 @@ class MattesMIMetric(MattesBase):
         if self.prealign is not None:
             T = T.dot(self.prealign)
 
+        if self.static_aff is None:
+            grid_to_space = T
+        else:
+            grid_to_space = T.dot(self.static_aff)
+
         # Warp the moving image
         self.warped = aff_warp(self.static, self.static_aff, self.moving,
                                self.moving_aff, T).astype(np.float64)
@@ -125,7 +130,7 @@ class MattesMIMetric(MattesBase):
         self.update_pdfs_dense(self.static, self.warped, self.smask, self.wmask)
         # Compute the gradient of the joint PDF w.r.t. parameters
         self.update_gradient_dense(xopt, self.transform, self.static,
-                                   self.warped, self.static_aff, self.grad_w,
+                                   self.warped, grid_to_space, self.grad_w,
                                    self.smask, self.wmask)
         # Evaluate the mutual information and its gradient
         # The results are in self.metric_val and self.metric_grad
@@ -352,9 +357,11 @@ class AffineRegistration(object):
             self.metric.setup(transform, current_static, current_moving,
                               current_static_aff, current_moving_aff,
                               current_smask, current_mmask, self.prealign)
+
+            grid_to_space = self.prealign.dot(current_static_aff)
             scales = estimate_param_scales(self.transform_type, self.dim,
                                            current_static.shape,
-                                           current_static_aff)
+                                           grid_to_space)
             self.metric.param_scales = scales
 
             #optimize this level
