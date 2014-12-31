@@ -181,7 +181,7 @@ def test_mattes_mi_registration_2d():
         start_sad = np.abs(static - moving).sum().sum()
 
         # In case of failure, it is useful to see the overlaid input images
-        rt.overlay_images(static, moving)
+        #rt.overlay_images(static, moving)
 
         metric = imaffine.MattesMIMetric(32)
         affreg = imaffine.AffineRegistration(metric, [10000, 111110, 11110],
@@ -193,7 +193,7 @@ def test_mattes_mi_registration_2d():
         end_sad = np.abs(static - warped).sum().sum()
 
         # In case of failure, it is useful to see the overlaid resulting images
-        rt.overlay_images(static, warped)
+        #rt.overlay_images(static, warped)
 
         reduction = 1 - end_sad / start_sad
         print("%s>>%f"%(transform, reduction))
