@@ -274,6 +274,8 @@ class AffineRegistration(object):
         elif prealign == 'centers':
             self.prealign = aff_geometric_centers(static, static_affine, moving,
                                                   moving_affine)
+        else:
+            self.prealign = prealign
         #Extract information from the affine matrices to create the scale space
         static_direction, static_spacing = \
             get_direction_and_spacings(static_affine, self.dim)
