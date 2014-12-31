@@ -622,6 +622,7 @@ cdef _compute_pdfs_dense_3d(double[:,:,:] static, double[:,:,:] moving,
     joint[...] = 0
     sum = 0
     with nogil:
+        valid_points = 0
         smarginal[:] = 0
         for k in range(nslices):
             for i in range(nrows):
