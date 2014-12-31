@@ -218,9 +218,18 @@ class MattesBase(object):
         moving: array, shape (S, R, C)
             moving image
         grid_to_space: array, shape (4, 4)
-            the grid-to-space transform associated to images static and moving
-            (we assume that both images have already been sampled at a common
-            grid)
+            we assume that both images have already been sampled at a common
+            grid. This transform must map voxel coordinates of this common grid
+            to physical coordinates of its corresponding voxel in the moving
+            image. For example, if the moving image was sampled on the static
+            image's grid (this is the typical setting) using an aligning
+            matrix A, then
+
+            (1) grid_to_space = A.dot(static_affine)
+
+            where static_affine is the transformation mapping static image's
+            grid coordinates to physical space.
+
         mgradient: array, shape (S, R, C, 3)
             the gradient of the moving image
         smask: array, shape (S, R, C)
