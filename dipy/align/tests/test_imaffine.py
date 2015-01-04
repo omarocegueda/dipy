@@ -184,8 +184,10 @@ def test_mattes_mi_registration_2d():
         #rt.overlay_images(static, moving)
 
         metric = imaffine.MattesMIMetric(32)
-        affreg = imaffine.AffineRegistration(metric, [10000, 111110, 11110],
-                                             1e-5, 1.0, options=None)
+        affreg = imaffine.AffineRegistration(metric, 'BFGS',
+                                             [10000, 111110, 11110], 1e-5, 1.0,
+                                             [4, 2, 1],[3, 1, 0],
+                                             options=None)
         x0 = None
         sol = affreg.optimize(static, moving, transform, x0, static_aff,
                               moving_aff, smask, mmask)

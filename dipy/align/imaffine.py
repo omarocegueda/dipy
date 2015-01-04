@@ -11,8 +11,10 @@ from dipy.align.transforms import (transform_type,
                                    number_of_parameters,
                                    param_to_matrix,
                                    get_identity_parameters)
-from dipy.align.imwarp import (get_direction_and_spacings,
-                               ScaleSpace)
+from dipy.align.imwarp import (get_direction_and_spacings, ScaleSpace,
+                               IsotropicScaleSpace)
+from dipy.align.conj_grad import nonlinear_cg
+
 
 class MattesMIMetric(MattesBase):
     def __init__(self, nbins=32):
@@ -26,7 +28,7 @@ class MattesMIMetric(MattesBase):
         super(MattesMIMetric, self).__init__(nbins)
 
     def setup(self, transform, static, moving, static_aff=None, moving_aff=None,
-              smask=None, mmask=None, prealign=None):
+              smask=None, mmask=None, prealign=None, precondition=False):
         r""" Prepares the metric to compute intensity densities and gradients
 
         The histograms will be setup to compute probability densities of
@@ -62,6 +64,9 @@ class MattesMIMetric(MattesBase):
             instead of manually warping the moving image and provide None or
             identity as prealign. This way, the metric avoids performing more
             than one interpolation.
+        precondition : boolean
+            if True, the gradient's components are scaled attempting to make the
+            levelsets of the objective function as isotropic as possible
         """
         self.dim = len(static.shape)
         self.transform = transform_type[transform]
@@ -73,6 +78,7 @@ class MattesMIMetric(MattesBase):
         self.mmask = mmask
         self.prealign = prealign
         self.param_scales = None
+        self.precondition = precondition
 
         T = np.eye(self.dim + 1)
         if self.prealign is not None:
@@ -86,7 +92,7 @@ class MattesMIMetric(MattesBase):
 
         MattesBase.setup(self, self.static, self.warped, self.smask, self.wmask)
 
-    def _update_dense(self, xopt):
+    def _update_dense(self, xopt, update_gradient = True):
         r""" Updates the marginal and joint distributions and the joint gradient
 
         The distributions and the gradient of the joint distribution are
@@ -107,11 +113,6 @@ class MattesMIMetric(MattesBase):
         if self.prealign is not None:
             T = T.dot(self.prealign)
 
-        if self.static_aff is None:
-            grid_to_space = T
-        else:
-            grid_to_space = T.dot(self.static_aff)
-
         # Warp the moving image
         self.warped = aff_warp(self.static, self.static_aff, self.moving,
                                self.moving_aff, T).astype(np.float64)
@@ -121,21 +122,41 @@ class MattesMIMetric(MattesBase):
         self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
                               self.moving_aff, T, True).astype(np.int32)
 
-        # Compute the gradient of the moving image at the current transform
-        self.grad_w = np.empty(shape=(self.warped.shape)+(self.dim,))
-        for i, grad in enumerate(sp.gradient(self.warped)):
-            self.grad_w[..., i] = grad
-
         # Update the joint and marginal intensity distributions
         self.update_pdfs_dense(self.static, self.warped, self.smask, self.wmask)
+
         # Compute the gradient of the joint PDF w.r.t. parameters
-        self.update_gradient_dense(xopt, self.transform, self.static,
-                                   self.warped, grid_to_space, self.grad_w,
-                                   self.smask, self.wmask)
+        if update_gradient:
+            # Compute the gradient of the moving image at the current transform
+            self.grad_w = np.empty(shape=(self.warped.shape)+(self.dim,), dtype=floating)
+            for i, grad in enumerate(sp.gradient(self.warped)):
+                self.grad_w[..., i] = grad
+
+            # Reorient the gradient field to physical coordinates
+            reorient = True
+            if reorient:
+                w_grid_to_space = self.static_aff
+                #print(w_grid_to_space)
+                if self.dim == 2:
+                    vf.reorient_vector_field_2d(self.grad_w, w_grid_to_space)
+                else:
+                    vf.reorient_vector_field_3d(self.grad_w, w_grid_to_space)
+
+            self.grad_w = self.grad_w.astype(np.float64)
+
+            if self.static_aff is None:
+                grid_to_space = T
+            else:
+                grid_to_space = T.dot(self.static_aff)
+
+            self.update_gradient_dense(xopt, self.transform, self.static,
+                                       self.warped, grid_to_space, self.grad_w,
+                                       self.smask, self.wmask)
+
         # Evaluate the mutual information and its gradient
         # The results are in self.metric_val and self.metric_grad
         # ready to be returned from 'distance' and 'gradient'
-        self.update_mi_metric(True)
+        self.update_mi_metric(update_gradient)
 
     def distance(self, xopt):
         r""" Numeric value of the metric evaluated at the given parameters
@@ -146,7 +167,7 @@ class MattesMIMetric(MattesBase):
             (the transform name is provided when self.setup is called), n is
             the number of parameters of the transform
         """
-        self._update_dense(xopt)
+        self._update_dense(xopt, False)
         return self.metric_val
 
     def gradient(self, xopt):
@@ -158,11 +179,12 @@ class MattesMIMetric(MattesBase):
             (the transform name is provided when self.setup is called), n is
             the number of parameters of the transform
         """
-        self._update_dense(xopt)
-        if self.param_scales is not None:
+        self._update_dense(xopt, True)
+        if self.precondition:
             return self.metric_grad / self.param_scales
         else:
             return self.metric_grad.copy()
+
 
     def value_and_gradient(self, xopt):
         r""" Numeric value of the metric and its gradient at the given parameter
@@ -174,9 +196,11 @@ class MattesMIMetric(MattesBase):
             (the transform name is provided when self.setup is called), n is
             the number of parameters of the transform
         """
-        self._update_dense(xopt)
-        if self.param_scales is not None:
-            return self.metric_val, self.metric_grad.copy()
+        self._update_dense(xopt, True)
+        print(">>",self.metric_val)
+        #print(">>",self.metric_val, self.param_scales, self.metric_grad.copy() / self.param_scales)
+        if self.precondition:
+            return self.metric_val, self.metric_grad / self.param_scales
         else:
             return self.metric_val, self.metric_grad.copy()
 
@@ -184,9 +208,12 @@ class MattesMIMetric(MattesBase):
 class AffineRegistration(object):
     def __init__(self,
                  metric=None,
+                 method = 'CGGS',
                  level_iters=None,
                  opt_tol=1e-5,
                  ss_sigma_factor=1.0,
+                 factors = None,
+                 sigmas = None,
                  options=None):
         r""" Initializes an instance of the AffineRegistration class
 
@@ -224,7 +251,13 @@ class AffineRegistration(object):
         self.ss_sigma_factor = ss_sigma_factor
 
         self.options = options
-        self.method = 'CG'
+        self.method = method
+
+        self.use_isotropic = False
+        if (factors is not None) and (sigmas is not None):
+            self.factors = factors
+            self.sigmas = sigmas
+            self.use_isotropic = True
 
 
     def _init_optimizer(self, static, moving, transform, x0,
@@ -290,11 +323,19 @@ class AffineRegistration(object):
         static = (static - static.min())/(static.max() - static.min())
         moving = (moving - moving.min())/(moving.max() - moving.min())
         #Build the scale space of the input images
-        self.moving_ss = ScaleSpace(moving, self.levels, moving_affine,
+
+        if self.use_isotropic:
+            self.moving_ss = IsotropicScaleSpace(moving, self.factors, self.sigmas,
+                                    moving_affine, moving_spacing, False)
+
+            self.static_ss = IsotropicScaleSpace(static, self.factors, self.sigmas,
+                                        static_affine, static_spacing, False)
+        else:
+            self.moving_ss = ScaleSpace(moving, self.levels, moving_affine,
                                     moving_spacing, self.ss_sigma_factor,
                                     False)
 
-        self.static_ss = ScaleSpace(static, self.levels, static_affine,
+            self.static_ss = ScaleSpace(static, self.levels, static_affine,
                                     static_spacing, self.ss_sigma_factor,
                                     False)
 
@@ -354,40 +395,51 @@ class AffineRegistration(object):
             current_mmask = original_mmask
 
             # Prepare the metric for iterations at this resolution
+            if self.method == 'CGGS':
+                precondition = True
+            else:
+                precondition = False
             self.metric.setup(transform, current_static, current_moving,
                               current_static_aff, current_moving_aff,
-                              current_smask, current_mmask, self.prealign)
+                              current_smask, current_mmask, self.prealign,
+                              precondition)
 
-            grid_to_space = self.prealign.dot(current_static_aff)
-            scales = estimate_param_scales(self.transform_type, self.dim,
-                                           current_static.shape,
-                                           grid_to_space)
-            self.metric.param_scales = scales
+            if precondition:
+                grid_to_space = self.prealign.dot(current_static_aff)
+                scales = estimate_param_scales(self.transform_type, self.dim,
+                                               current_static.shape,
+                                               grid_to_space)
+                self.metric.param_scales = scales
 
             #optimize this level
             if self.options is None:
-                self.options = {'gtol':1e-4, 'maxiter': max_iter, 'disp':True}
-            print("Options:",self.options)
-            opt = Optimizer(self.metric.value_and_gradient, self.x0,
-                            method=self.method, jac = True,
-                            options=self.options)
+                self.options = {'gtol':1e-4, 'maxiter': max_iter, 'disp':False}
+            if self.method == 'CGGS':
+                domain_shape = current_static.shape
+                domain_affine = self.prealign.dot(current_static_aff)
+
+                xopt = nonlinear_cg(self.transform_type, self.dim, domain_shape,
+                                    domain_affine,
+                                    self.metric.distance,
+                                    self.metric.gradient,
+                                    self.metric.value_and_gradient,
+                                    self.x0, self.options)
+            else:
+                opt = Optimizer(self.metric.value_and_gradient, self.x0,
+                                method=self.method, jac = True,
+                                options=self.options)
+                xopt = opt.xopt
 
             # Update prealign matrix with optimal parameters
             T = np.empty(shape=(self.dim + 1, self.dim + 1))
-            param_to_matrix(self.metric.transform, self.dim, opt.xopt, T)
+            param_to_matrix(self.metric.transform, self.dim, xopt, T)
             self.prealign = T.dot(self.prealign)
 
             # Start next iteration at identity
             get_identity_parameters(self.transform_type, self.dim, self.x0)
 
             # Update the metric to the current solution
-            self.metric.setup(transform, current_static, current_moving,
-                              current_static_aff, current_moving_aff,
-                              current_smask, current_mmask, self.prealign)
-            self.metric._update_dense(self.x0)
-
-            print("Metric value: %f"%(self.metric.metric_val,))
-
+            self.metric._update_dense(xopt, False)
         return self.prealign
 
 

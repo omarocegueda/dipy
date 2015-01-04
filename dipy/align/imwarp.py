@@ -6,6 +6,7 @@ from dipy.utils.six import with_metaclass
 import numpy as np
 import numpy.linalg as npl
 import scipy as sp
+from scipy import ndimage
 import nibabel as nib
 import dipy.align.vector_fields as vfu
 from dipy.align import floating
@@ -186,7 +187,7 @@ class ScaleSpace(object):
             sigmas = sigma_factor * (output_spacing / input_spacing - 1.0)
 
             #filter along each direction with the appropriate sigma
-            filtered = sp.ndimage.filters.gaussian_filter(image, sigmas)
+            filtered = ndimage.filters.gaussian_filter(image, sigmas)
             filtered = ((filtered - filtered.min())/
                        (filtered.max() - filtered.min()))
             if mask0:
@@ -399,6 +400,102 @@ class ScaleSpace(object):
 
         """
         return self._get_attribute(self.sigmas, level)
+
+
+class IsotropicScaleSpace(ScaleSpace):
+    def __init__(self, image, factors, sigmas,
+                 codomain_affine=None,
+                 input_spacing=None,
+                 mask0=False):
+        r"""
+
+        Example:
+        image = np.zeros(shape=(256, 256, 128))
+        factors = [4, 2, 1]
+        sigmas = [3, 1, 0]
+        codomain_affine = None
+        input_spacing = np.array([1., 1., 1.5])
+        mask0 = False
+
+        ss = IsotropicScaleSpace(image, factors, sigmas, codomain_affine,
+                                 input_spacing, mask0)
+        shape = ss.get_domain_shape(2)
+
+        """
+        self.dim = len(image.shape)
+        self.num_levels = len(factors)
+        if len(sigmas) != self.num_levels:
+            raise ValueError("sigmas and factors must have the same length")
+        input_size = np.array(image.shape)
+        if mask0:
+            mask = np.asarray(image>0, dtype=np.int32)
+
+        #normalize input image to [0,1]
+        img = (image - image.min())/(image.max() - image.min())
+        if mask0:
+            img *= mask
+
+        #The properties are saved in separate lists. Insert input image
+        #properties at the first level of the scale space
+        self.images = [img.astype(floating)]
+        self.domain_shapes = [input_size.astype(np.int32)]
+        if input_spacing is None:
+            input_spacing = np.ones((self.dim,), dtype = np.int32)
+        self.spacings = [input_spacing]
+        self.scalings = [np.ones(self.dim)]
+        self.affines = [codomain_affine]
+        self.sigmas = [np.ones(self.dim) * sigmas[self.num_levels - 1]]
+
+        if codomain_affine is not None:
+            self.affine_invs = [npl.inv(codomain_affine)]
+        else:
+            self.affine_invs = [None]
+
+        #compute the rest of the levels
+        min_index = np.argmin(input_spacing)
+        min_spacing = input_spacing[min_index]
+        for i in range(1, self.num_levels):
+            factor = factors[self.num_levels - 1 - i]
+            shrink_factors = np.zeros(self.dim)
+            new_spacing = np.zeros(self.dim)
+            shrink_factors[min_index] = factor
+            new_spacing[min_index] = input_spacing[min_index] * factor
+            for j in range(self.dim):
+                if j != min_index:
+                    #Select the factor that maximizes isotropy
+                    shrink_factors[j] = factor
+                    new_spacing[j] = input_spacing[j] * factor
+                    min_diff = np.abs(new_spacing[j] - new_spacing[min_index])
+                    for f in range(1, factor):
+                        diff = np.abs(input_spacing[j] * f - new_spacing[min_index])
+                        if diff < min_diff:
+                            shrink_factors[j] = f
+                            new_spacing[j] = input_spacing[j] * f
+                            min_diff = diff
+
+            extended = np.append(shrink_factors, [1])
+            if not codomain_affine is None:
+                affine = codomain_affine.dot(np.diag(extended))
+            else:
+                affine = np.diag(extended)
+            output_size = (input_size / shrink_factors).astype(np.int32)
+            new_sigmas = np.ones(self.dim) * sigmas[self.num_levels - i - 1]
+
+            #filter along each direction with the appropriate sigma
+            filtered = ndimage.filters.gaussian_filter(image, new_sigmas)
+            filtered = ((filtered - filtered.min())/
+                       (filtered.max() - filtered.min()))
+            if mask0:
+                filtered *= mask
+
+            #Add current level to the scale space
+            self.images.append(filtered.astype(floating))
+            self.domain_shapes.append(output_size)
+            self.spacings.append(new_spacing)
+            self.scalings.append(shrink_factors)
+            self.affines.append(affine)
+            self.affine_invs.append(npl.inv(affine))
+            self.sigmas.append(new_sigmas)
 
 
 class DiffeomorphicMap(object):
