@@ -181,7 +181,7 @@ def nonlinear_cg(transform_type, dim, domain_shape, domain_affine,
         rate = estimate_learning_rate(transform_type, dim, theta, p, domain_shape, domain_affine)
         #print("!!!Learning rate:", rate)
         # Minimize the objectove function along p
-        alpha = golden_section_ls(val, p, 0, rate, 20 * rate)
+        alpha = golden_section_ls(val, p, 0, rate, 5 * rate)
         # Make a step along p with optimum length
         theta += alpha * p
         # Compute value and gradient at new current point

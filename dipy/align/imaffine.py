@@ -27,7 +27,7 @@ class MattesMIMetric(MattesBase):
         """
         super(MattesMIMetric, self).__init__(nbins)
 
-    def setup(self, transform, static, moving, static_aff=None, moving_aff=None,
+    def setup(self, transform, static, moving, moving_spacing, static_aff=None, moving_aff=None,
               smask=None, mmask=None, prealign=None, precondition=False):
         r""" Prepares the metric to compute intensity densities and gradients
 
@@ -44,6 +44,8 @@ class MattesMIMetric(MattesBase):
             static image
         moving : array, shape (S', R', C') or (R', C')
             moving image
+        moving_spacing : array, shape (3,) or (2,)
+            the spacing between neighboring voxels along each dimension
         static_affine : array (dim+1, dim+1)
             the grid-to-space transform of the static image
         moving_affine : array (dim+1, dim+1)
@@ -73,7 +75,10 @@ class MattesMIMetric(MattesBase):
         self.static = np.array(static).astype(np.float64)
         self.moving = np.array(moving).astype(np.float64)
         self.static_aff = static_aff
+        self.static_aff_inv = np.linalg.inv(static_aff)
         self.moving_aff = moving_aff
+        self.moving_aff_inv = np.linalg.inv(moving_aff)
+        self.moving_spacing = moving_spacing
         self.smask = smask
         self.mmask = mmask
         self.prealign = prealign
@@ -118,7 +123,6 @@ class MattesMIMetric(MattesBase):
                                self.moving_aff, T).astype(np.float64)
 
         # Get the warped mask.
-        # Note: we should warp mmask with nearest neighbor interpolation instead
         self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
                               self.moving_aff, T, True).astype(np.int32)
 
@@ -127,28 +131,18 @@ class MattesMIMetric(MattesBase):
 
         # Compute the gradient of the joint PDF w.r.t. parameters
         if update_gradient:
-            # Compute the gradient of the moving image at the current transform
-            self.grad_w = np.empty(shape=(self.warped.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.warped)):
-                self.grad_w[..., i] = grad
-
-            # Reorient the gradient field to physical coordinates
-            reorient = True
-            if reorient:
-                w_grid_to_space = self.static_aff
-                #print(w_grid_to_space)
-                if self.dim == 2:
-                    vf.reorient_vector_field_2d(self.grad_w, w_grid_to_space)
-                else:
-                    vf.reorient_vector_field_3d(self.grad_w, w_grid_to_space)
-
-            self.grad_w = self.grad_w.astype(np.float64)
-
             if self.static_aff is None:
                 grid_to_space = T
             else:
                 grid_to_space = T.dot(self.static_aff)
 
+            # Compute the gradient of the moving image at the current transform
+            grid_to_space = T.dot(self.static_aff)
+            self.grad_w = vf.gradient(self.moving.astype(floating), self.moving_aff_inv,
+                                      self.moving_spacing, self.static.shape, grid_to_space)
+            self.grad_w = np.array(self.grad_w, dtype=np.float64)
+
+            # Update the gradient of the metric
             self.update_gradient_dense(xopt, self.transform, self.static,
                                        self.warped, grid_to_space, self.grad_w,
                                        self.smask, self.wmask)
@@ -363,6 +357,7 @@ class AffineRegistration(object):
         # Multi-resolution iterations
         original_static_affine = self.static_ss.get_affine(0)
         original_moving_affine = self.moving_ss.get_affine(0)
+        original_moving_spacing = self.moving_ss.get_spacing(0)
 
         if smask is None:
             smask = np.ones_like(self.static_ss.get_image(0), dtype=np.int32)
@@ -391,6 +386,7 @@ class AffineRegistration(object):
 
             # The moving image is full resolution
             current_moving_aff = original_moving_affine
+            current_moving_spacing = original_moving_spacing
             current_moving = self.moving_ss.get_image(level)
             current_mmask = original_mmask
 
@@ -400,7 +396,7 @@ class AffineRegistration(object):
             else:
                 precondition = False
             self.metric.setup(transform, current_static, current_moving,
-                              current_static_aff, current_moving_aff,
+                              current_moving_spacing, current_static_aff, current_moving_aff,
                               current_smask, current_mmask, self.prealign,
                               precondition)
 

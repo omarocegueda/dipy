@@ -2964,3 +2964,139 @@ def create_sphere(cnp.npy_intp nslices, cnp.npy_intp nrows,
                 else:
                     s[k,i,j] = 0
     return s
+
+cdef _gradient_3d(floating[:,:,:] img, double[:,:] img_affine_inv,
+                  double[:] img_spacing, int[:] domain_shape,
+                  double[:,:] domain_affine, floating[:,:,:,:] out):
+    r""" Gradient of a 3D image in physical space coordinates
+
+    """
+    cdef:
+        int nslices = domain_shape[0]
+        int nrows = domain_shape[1]
+        int ncols = domain_shape[2]
+        int i, j, k, inside
+        double tmp
+        double[:] x = np.ndarray(shape=(3,), dtype=np.float64)
+        double[:] dx = np.ndarray(shape=(3,), dtype=np.float64)
+        double[:] h = np.ndarray(shape=(3,), dtype=np.float64)
+        double[:] q = np.ndarray(shape=(3,), dtype=np.float64)
+
+    with nogil:
+        h[0] = 0.5 * img_spacing[0]
+        h[1] = 0.5 * img_spacing[1]
+        h[2] = 0.5 * img_spacing[2]
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    # Compute coordinates of index (k, i, j) in physical space
+                    x[0] = _apply_affine_3d_x0(k, i, j, 1, domain_affine)
+                    x[1] = _apply_affine_3d_x1(k, i, j, 1, domain_affine)
+                    x[2] = _apply_affine_3d_x2(k, i, j, 1, domain_affine)
+
+                    dx[:] = x[:]
+                    for p in range(3):
+                        # Compute coordinates of point dx on img's grid
+                        dx[p] = x[p] - h[p]
+                        q[0] = _apply_affine_3d_x0(dx[0], dx[1], dx[2], 1, img_affine_inv)
+                        q[1] = _apply_affine_3d_x1(dx[0], dx[1], dx[2], 1, img_affine_inv)
+                        q[2] = _apply_affine_3d_x2(dx[0], dx[1], dx[2], 1, img_affine_inv)
+
+                        # Interpolate img at q
+                        inside = _interpolate_scalar_3d(img, q[0], q[1], q[2],
+                                                        &out[k, i, j, p])
+                        if inside == 0:
+                            out[k, i, j, p] = 0
+                            continue
+
+                        tmp = out[k, i, j, p]
+
+                        # Compute coordinates of point dx on img's grid
+                        dx[p] = x[p] + h[p]
+                        q[0] = _apply_affine_3d_x0(dx[0], dx[1], dx[2], 1, img_affine_inv)
+                        q[1] = _apply_affine_3d_x1(dx[0], dx[1], dx[2], 1, img_affine_inv)
+                        q[2] = _apply_affine_3d_x2(dx[0], dx[1], dx[2], 1, img_affine_inv)
+
+                        # Interpolate img at q
+                        inside = _interpolate_scalar_3d(img, q[0], q[1], q[2],
+                                                        &out[k, i, j, p])
+                        if inside == 0:
+                            out[k, i, j, p] = 0
+                            continue
+
+                        out[k, i, j, p] = (out[k, i, j, p] - tmp) / img_spacing[p]
+                        dx[p] = x[p]
+
+
+cdef _gradient_2d(floating[:,:] img, double[:,:] img_affine_inv,
+                  double[:] img_spacing, int[:] domain_shape,
+                  double[:,:] domain_affine, floating[:,:,:] out):
+    r""" Gradient of a 2D image in physical space coordinates
+
+    """
+    cdef:
+        int nrows = domain_shape[0]
+        int ncols = domain_shape[1]
+        int i, j, k, inside
+        double tmp
+        double[:] x = np.ndarray(shape=(2,), dtype=np.float64)
+        double[:] dx = np.ndarray(shape=(2,), dtype=np.float64)
+        double[:] h = np.ndarray(shape=(2,), dtype=np.float64)
+        double[:] q = np.ndarray(shape=(2,), dtype=np.float64)
+
+    with nogil:
+        h[0] = 0.5 * img_spacing[0]
+        h[1] = 0.5 * img_spacing[1]
+        for i in range(nrows):
+            for j in range(ncols):
+                # Compute coordinates of index (i, j) in physical space
+                x[0] = _apply_affine_2d_x0(i, j, 1, domain_affine)
+                x[1] = _apply_affine_2d_x1(i, j, 1, domain_affine)
+
+                dx[:] = x[:]
+                for p in range(2):
+                    # Compute coordinates of point dx on img's grid
+                    dx[p] = x[p] - h[p]
+                    q[0] = _apply_affine_2d_x0(dx[0], dx[1], 1, img_affine_inv)
+                    q[1] = _apply_affine_2d_x1(dx[0], dx[1], 1, img_affine_inv)
+
+                    # Interpolate img at q
+                    inside = _interpolate_scalar_2d(img, q[0], q[1],
+                                                    &out[i, j, p])
+                    if inside == 0:
+                        out[i, j, p] = 0
+                        continue
+
+                    tmp = out[i, j, p]
+
+                    # Compute coordinates of point dx on img's grid
+                    dx[p] = x[p] + h[p]
+                    q[0] = _apply_affine_2d_x0(dx[0], dx[1], 1, img_affine_inv)
+                    q[1] = _apply_affine_2d_x1(dx[0], dx[1], 1, img_affine_inv)
+
+                    # Interpolate img at q
+                    inside = _interpolate_scalar_2d(img, q[0], q[1],
+                                                    &out[i, j, p])
+                    if inside == 0:
+                        out[i, j, p] = 0
+                        continue
+
+                    out[i, j, p] = (out[i, j, p] - tmp) / img_spacing[p]
+                    dx[p] = x[p]
+
+
+def gradient(img, img_affine_inv, img_spacing, domain_shape, domain_affine):
+    ftype = img.dtype
+    dim = len(img.shape)
+    out = np.ndarray(shape=img.shape+(dim,), dtype=ftype)
+    if dim == 2:
+        _gradient_2d(img, img_affine_inv.astype(np.float64),
+                     img_spacing.astype(np.float64),
+                     np.array(domain_shape, dtype=np.int32),
+                     domain_affine.astype(np.float64), out)
+    else:
+        _gradient_3d(img, img_affine_inv.astype(np.float64),
+                     img_spacing.astype(np.float64),
+                     np.array(domain_shape, dtype=np.int32),
+                     domain_affine.astype(np.float64), out)
+    return out
