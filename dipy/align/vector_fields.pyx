@@ -3063,9 +3063,9 @@ cdef _gradient_2d(floating[:,:] img, double[:,:] img_affine_inv,
                     # Interpolate img at q
                     inside = _interpolate_scalar_2d(img, q[0], q[1],
                                                     &out[i, j, p])
-                    if inside == 0:
-                        out[i, j, p] = 0
-                        continue
+                    #if inside == 0:
+                    #    out[i, j, p] = 0
+                    #    continue
 
                     tmp = out[i, j, p]
 
@@ -3077,9 +3077,9 @@ cdef _gradient_2d(floating[:,:] img, double[:,:] img_affine_inv,
                     # Interpolate img at q
                     inside = _interpolate_scalar_2d(img, q[0], q[1],
                                                     &out[i, j, p])
-                    if inside == 0:
-                        out[i, j, p] = 0
-                        continue
+                    #if inside == 0:
+                    #    out[i, j, p] = 0
+                    #    continue
 
                     out[i, j, p] = (out[i, j, p] - tmp) / img_spacing[p]
                     dx[p] = x[p]

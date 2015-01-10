@@ -11,8 +11,10 @@ from dipy.align.transforms import (transform_type,
                                    param_to_matrix,
                                    get_identity_parameters)
 
+import dipy.align.imaffine as imaffine
 from dipy.align.imaffine import aff_warp
 import dipy.viz.regtools as rt
+from dipy.data import get_data
 
 def create_random_image_pair_2d(nr, nc, nvals):
     r""" Create a pair of images with an arbitrary, non-uniform joint
@@ -101,6 +103,75 @@ def test_mattes_densities_dense():
         expected_smarginal = expected_joint.sum(1)
         expected_smarginal /= expected_smarginal.sum()
         assert_array_almost_equal(actual_smarginal, expected_smarginal)
+
+
+def setup_random_transform_2d(ttype, rfactor):
+    np.random.seed(3147702)
+    dim = 2
+    fname = get_data('t1_coronal_slice')
+    moving = np.load(fname)
+    moving = moving[40:180, 50:210]
+    moving_aff = np.eye(dim + 1)
+    mmask = np.ones_like(moving, dtype=np.int32)
+
+    n = number_of_parameters(ttype, dim)
+    theta = np.empty(n)
+    get_identity_parameters(ttype, dim, theta)
+    theta += np.random.rand(n) * rfactor
+
+    T = np.empty((dim + 1, dim + 1))
+    param_to_matrix(ttype, dim, theta, T)
+
+    static = aff_warp(moving, moving_aff, moving, moving_aff, T)
+    static = static.astype(np.float64)
+    static_aff = moving_aff
+    smask = np.ones_like(static, dtype=np.int32)
+
+    return static, moving, static_aff, moving_aff, smask, mmask, T
+
+
+
+
+
+def test_mattes_gradient_2d():
+    h = 1e-5
+    dim = 2
+    transforms = transform_type.keys()
+    factors = {'TRANSLATION':2.0,
+               'ROTATION':0.1,
+               'RIGID':0.1,
+               'SCALING':0.1,
+               'AFFINE':0.1}
+    for transform in transforms:
+        factor = factors[transform]
+        t = transform_type[transform]
+        n = number_of_parameters(t, dim)
+        theta = np.ndarray(shape=(n,))
+        get_identity_parameters(t, dim, theta)
+        theta += h
+
+        static, moving, static_aff, moving_aff, smask, mmask, T = \
+                                            setup_random_transform_2d(t, factor)
+
+        metric = imaffine.MattesMIMetric(32)
+        spacing = np.ones(2)
+        metric.setup(transform, static, moving, spacing, static_aff, moving_aff,
+                     smask, mmask, prealign=None, precondition=False)
+
+        # Compute the gradient with the implementation under test
+        val0, actual = metric.value_and_gradient(theta)
+        # Compute the gradient using finite-diferences
+        expected = np.empty_like(actual)
+        for i in range(n):
+            dtheta = theta.copy()
+            dtheta[i] += h
+            val1 = metric.distance(dtheta)
+            expected[i] = (val1 - val0) / h
+
+        nprod = expected.dot(actual) / (linalg.norm(expected) * linalg.norm(actual))
+        print("Test: ", transform, nprod)
+        assert_equal(nprod >= 0.999, True)
+
 
 
 def test_mattes_densities_sparse():

@@ -6,6 +6,7 @@
 import numpy as np
 cimport numpy as cnp
 cimport cython
+from fused_types cimport floating
 
 from dipy.align.vector_fields cimport(_apply_affine_3d_x0,
                                       _apply_affine_3d_x1,
@@ -561,11 +562,10 @@ cdef _compute_pdfs_dense_2d(double[:,:] static, double[:,:] moving,
                     joint[r, c + offset] += val
                     sum += val
                     spline_arg += 1.0
-
         if sum > 0:
             for i in range(nbins):
                 for j in range(nbins):
-                    joint[i, j] /= sum
+                    joint[i, j] /= valid_points
 
             for i in range(nbins):
                 smarginal[i] /= valid_points
@@ -746,7 +746,7 @@ cdef _compute_pdfs_sparse(double[:] sval, double[:] mval, double smin,
 cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
                                   double[:,:] static, double[:,:] moving,
                                   double[:,:] grid_to_space,
-                                  double[:,:,:] mgradient, int[:,:] smask,
+                                  floating[:,:,:] mgradient, int[:,:] smask,
                                   int[:,:] mmask, double smin, double sdelta,
                                   double mmin, double mdelta, int nbins,
                                   int padding, double[:,:,:] grad_pdf):
@@ -850,7 +850,7 @@ cdef _joint_pdf_gradient_dense_2d(double[:] theta, jacobian_function jacobian,
 cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
                                   double[:,:,:] static, double[:,:,:] moving,
                                   double[:,:] grid_to_space,
-                                  double[:,:,:,:] mgradient, int[:,:,:] smask,
+                                  floating[:,:,:,:] mgradient, int[:,:,:] smask,
                                   int[:,:,:] mmask, double smin, double sdelta,
                                   double mmin, double mdelta, int nbins,
                                   int padding, double[:,:,:] grad_pdf):
@@ -957,7 +957,7 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, jacobian_function jacobian,
 cdef _joint_pdf_gradient_sparse_2d(double[:] theta, jacobian_function jacobian,
                                    double[:] sval, double[:] mval,
                                    double[:,:] sample_points,
-                                   double[:,:] mgradient, double smin,
+                                   floating[:,:] mgradient, double smin,
                                    double sdelta, double mmin, double mdelta,
                                    int nbins, int padding,
                                    double[:,:,:] grad_pdf):
@@ -1036,7 +1036,7 @@ cdef _joint_pdf_gradient_sparse_2d(double[:] theta, jacobian_function jacobian,
 cdef _joint_pdf_gradient_sparse_3d(double[:] theta, jacobian_function jacobian,
                                    double[:] sval, double[:] mval,
                                    double[:,:] sample_points,
-                                   double[:,:] mgradient, double smin,
+                                   floating[:,:] mgradient, double smin,
                                    double sdelta, double mmin, double mdelta,
                                    int nbins, int padding,
                                    double[:,:,:] grad_pdf):

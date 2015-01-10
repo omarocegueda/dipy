@@ -91,9 +91,11 @@ class MattesMIMetric(MattesBase):
 
         self.warped = aff_warp(self.static, self.static_aff, self.moving,
                                self.moving_aff, T).astype(np.float64)
-
-        self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
-                              self.moving_aff, T, True).astype(np.int32)
+        if self.mmask is not None:
+            self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
+                                  self.moving_aff, T, True).astype(np.int32)
+        else:
+            self.wmask = None
 
         MattesBase.setup(self, self.static, self.warped, self.smask, self.wmask)
 
@@ -122,9 +124,12 @@ class MattesMIMetric(MattesBase):
         self.warped = aff_warp(self.static, self.static_aff, self.moving,
                                self.moving_aff, T).astype(np.float64)
 
-        # Get the warped mask.
-        self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
-                              self.moving_aff, T, True).astype(np.int32)
+        if self.mmask is not None:
+            # Get the warped mask.
+            self.wmask = aff_warp(self.static, self.static_aff, self.mmask,
+                                  self.moving_aff, T, True).astype(np.int32)
+        else:
+            self.wmask = None
 
         # Update the joint and marginal intensity distributions
         self.update_pdfs_dense(self.static, self.warped, self.smask, self.wmask)
@@ -140,7 +145,6 @@ class MattesMIMetric(MattesBase):
             grid_to_space = T.dot(self.static_aff)
             self.grad_w = vf.gradient(self.moving.astype(floating), self.moving_aff_inv,
                                       self.moving_spacing, self.static.shape, grid_to_space)
-            self.grad_w = np.array(self.grad_w, dtype=np.float64)
 
             # Update the gradient of the metric
             self.update_gradient_dense(xopt, self.transform, self.static,
@@ -359,11 +363,6 @@ class AffineRegistration(object):
         original_moving_affine = self.moving_ss.get_affine(0)
         original_moving_spacing = self.moving_ss.get_spacing(0)
 
-        if smask is None:
-            smask = np.ones_like(self.static_ss.get_image(0), dtype=np.int32)
-        if mmask is None:
-            mmask = np.ones_like(self.moving_ss.get_image(0), dtype=np.int32)
-
         original_smask = smask
         original_mmask = mmask
 
@@ -380,13 +379,17 @@ class AffineRegistration(object):
             current_static = aff_warp(tuple(current_static_shape),
                                       current_static_aff, smooth_static,
                                       original_static_affine, None, False)
-            current_smask = aff_warp(tuple(current_static_shape),
-                                     current_static_aff, original_smask,
-                                     original_static_affine, None, True)
+            if original_smask is not None:
+                current_smask = aff_warp(tuple(current_static_shape),
+                                         current_static_aff, original_smask,
+                                         original_static_affine, None, True)
+            else:
+                current_smask = None
 
             # The moving image is full resolution
             current_moving_aff = original_moving_affine
-            current_moving_spacing = original_moving_spacing
+            current_moving_spacing = self.moving_ss.get_spacing(level)
+
             current_moving = self.moving_ss.get_image(level)
             current_mmask = original_mmask
 
