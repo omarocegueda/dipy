@@ -189,8 +189,8 @@ def nonlinear_cg(transform_type, dim, domain_shape, domain_affine,
         if(val1 < best_val):
             best_val, best_theta = val1, theta.copy()
         energy_list.append(val1)
-        if len(energy_list) >= 20:
-            der = _get_energy_derivative(energy_list, 20)
+        if len(energy_list) >= 10:
+            der = _get_energy_derivative(energy_list, 10)
         # Compute the new (conjugate) search direction with Polak-Riviere rule
         beta = grad1.dot(grad1-grad0)/grad0.dot(grad0)
 
