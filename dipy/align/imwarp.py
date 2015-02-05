@@ -197,6 +197,8 @@ class DiffeomorphicMap(object):
         self.is_inverse = False
         self.forward = None
         self.backward = None
+        self.jac = None
+        self.inv_jac = None
 
     def get_forward_field(self):
         r"""Deformation field to transform an image in the forward direction
@@ -803,6 +805,20 @@ class DiffeomorphicMap(object):
         simplified.backward = new_backward
         return simplified
 
+    def update_jacobian(self):
+        field = self.get_forward_field()
+        if self.dim == 2:
+            self.jac = np.array(vfu.compute_jacobian_2d(field))
+        else:
+            self.jac = np.array(vfu.compute_jacobian_3d(field))
+
+    def update_inverse_jacobian(self):
+        field = self.get_backward_field()
+        if self.dim == 2:
+            self.inv_jac = np.array(vfu.compute_jacobian_2d(field))
+        else:
+            self.inv_jac = np.array(vfu.compute_jacobian_3d(field))
+
 
 class DiffeomorphicRegistration(with_metaclass(abc.ABCMeta, object)):
     def __init__(self, metric=None):
@@ -864,7 +880,9 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                  opt_tol=1e-5,
                  inv_iter=20,
                  inv_tol=1e-3,
-                 callback=None):
+                 callback=None,
+                 restrict=None,
+                 jmodulate=False):
         r""" Symmetric Diffeomorphic Registration (SyN) Algorithm
 
         Performs the multi-resolution optimization algorithm for non-linear
@@ -922,6 +940,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.static_direction = None
         self.moving_direction = None
         self.mask0 = metric.mask0
+        self.restrict = restrict
+        self.jmodulate = jmodulate
 
     def update(self, current_displacement, new_displacement,
                disp_world2grid, time_scaling):
@@ -1111,8 +1131,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
     def _end_optimizer(self):
         r"""Frees the resources allocated during initialization
         """
-        del self.moving_ss
-        del self.static_ss
+        #del self.moving_ss
+        #del self.static_ss
 
     def _iterate(self):
         r"""Performs one symmetric iteration
@@ -1161,6 +1181,11 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         # Pass both images to the metric. Now both images are sampled on the
         # reference grid (equal to the static image's grid) and the direction
         # doesn't change across scales
+        if self.jmodulate:
+            self.static_to_ref.update_inverse_jacobian()
+            self.moving_to_ref.update_inverse_jacobian()
+            wstatic *= self.static_to_ref.inv_jac
+            wmoving *= self.moving_to_ref.inv_jac
         self.metric.set_moving_image(wmoving, current_disp_grid2world,
                                      current_disp_spacing,
                                      self.static_direction)
@@ -1190,6 +1215,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             fw_step[:, :, 0, ...] = 0
             fw_step[:, :, -1, ...] = 0
 
+        if self.restrict is not None:
+            if self.dim == 2:
+                vfu.restrict_motion_2d(fw_step, self.restrict)
+            else:
+                vfu.restrict_motion_3d(fw_step, self.restrict)
+
         # Normalize the forward step
         nrm = np.sqrt(np.sum((fw_step/current_disp_spacing)**2, -1)).max()
         if nrm > 0:
@@ -1212,6 +1243,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         bw_step[:, 0, ...] = 0
         if(self.dim == 3):
             bw_step[:, :, 0, ...] = 0
+
+        if self.restrict is not None:
+            if self.dim == 2:
+                vfu.restrict_motion_2d(bw_step, self.restrict)
+            else:
+                vfu.restrict_motion_3d(bw_step, self.restrict)
 
         # Normalize the backward step
         nrm = np.sqrt(np.sum((bw_step/current_disp_spacing) ** 2, -1)).max()
@@ -1379,6 +1416,9 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             print('Moving-Reference Residual error :%0.6f (%0.6f)'
                   % (stats[1], stats[2]))
 
+        if self.return_partial:
+            return self.static_to_ref, self.moving_to_ref
+
         # Compose the two partial transformations
         self.static_to_ref = self.moving_to_ref.warp_endomorphism(
             self.static_to_ref.inverse()).inverse()
@@ -1389,9 +1429,11 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             print('Final residual error: %0.6f (%0.6f)' % (stats[1], stats[2]))
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
+        return self.static_to_ref
 
     def optimize(self, static, moving, static_grid2world=None,
-                 moving_grid2world=None, prealign=None):
+                 moving_grid2world=None, prealign=None, 
+                 return_partial=False, s_to_r=None, m_to_r=None):
         r"""
         Starts the optimization
 
@@ -1427,11 +1469,45 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             static_to_ref.transform_inverse).
 
         """
+        self.return_partial = return_partial
         if self.verbosity >= VerbosityLevels.DEBUG:
             print("Pre-align:", prealign)
 
         self._init_optimizer(static.astype(floating), moving.astype(floating),
                              static_grid2world, moving_grid2world, prealign)
-        self._optimize()
+
+        # Set the initial diffeomorphisms
+        if s_to_r is not None:
+            # Initialize static-to-reference diffeomorphism
+            R = self.static_to_ref.domain_affine
+            Sinv = s_to_r.domain_affine_inv
+            premult_index = mult_aff(Sinv, R)
+            premult_disp = None
+            vfu.compose_vector_fields_3d(self.static_to_ref.forward, s_to_r.forward,
+                                         premult_index, premult_disp, 1.0,
+                                         self.static_to_ref.forward)
+            R = self.static_to_ref.codomain_affine
+            Sinv = s_to_r.codomain_affine_inv
+            premult_index = mult_aff(Sinv, R)
+            vfu.compose_vector_fields_3d(self.static_to_ref.backward, s_to_r.backward,
+                                         premult_index, premult_disp, 1.0,
+                                         self.static_to_ref.backward)
+
+        if m_to_r is not None:
+            # Initialize moving-to-reference diffeomorphism
+            R = self.moving_to_ref.domain_affine
+            Sinv = m_to_r.domain_affine_inv
+            premult_index = mult_aff(Sinv, R)
+            premult_disp = None
+            vfu.compose_vector_fields_3d(self.moving_to_ref.forward, m_to_r.forward,
+                                         premult_index, premult_disp, 1.0,
+                                         self.moving_to_ref.forward)
+            R = self.moving_to_ref.codomain_affine
+            Sinv = m_to_r.codomain_affine_inv
+            premult_index = mult_aff(Sinv, R)
+            vfu.compose_vector_fields_3d(self.moving_to_ref.backward, m_to_r.backward,
+                                         premult_index, premult_disp, 1.0,
+                                         self.moving_to_ref.backward)
+        retval = self._optimize()
         self._end_optimizer()
-        return self.static_to_ref
+        return retval
