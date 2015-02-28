@@ -5,6 +5,7 @@
 import numpy as np
 cimport cython
 from dipy.align.fused_types cimport floating
+from dipy.align.splines import CubicSplineField
 
 cdef extern from "math.h":
     double sqrt(double x) nogil
@@ -986,6 +987,7 @@ cdef _compute_spline_1d(int knot_sp, spline_kernel kernel, double[:] out):
     cdef:
         int n = out.shape[0]
         int center = n // 2
+        int i
         double x, dx
 
     dx = 1.0 / knot_sp
@@ -1029,9 +1031,6 @@ class Spline3D:
         # Precompute the centered spline
         self.spline = np.ndarray(shape=tuple(self.grid_shape), dtype=np.float64)
         _compute_spline_3d(knot_spacings, derivative_orders, self.spline)
-
-    def peek(self, s, r, c):
-        return self.spline[s,r,c]
 
 
 def create_spline_3d(resolution, vox_size, derivative_orders):
@@ -1150,7 +1149,6 @@ class SplineField:
         volume = np.zeros(tuple(self.vol_shape), dtype=np.float64)
         _eval_spline_field(self.coef, self.kspacing, self.splines[der_orders].spline, volume)
         return np.array(volume)
-
 
 
 def regrid(floating[:,:,:]vol, double[:] factors, int[:] new_shape):
