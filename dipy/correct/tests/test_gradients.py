@@ -21,6 +21,7 @@ import scipy
 import scipy.sparse
 import scipy.sparse.linalg
 import dipy.correct.gradients as gr
+import dipy.correct.splines as splines
 
 
 def get_diag_affine(sp):
@@ -73,8 +74,8 @@ def test_andersson_new_subsample():
     down_nib = nib.load("b0_blipdown.nii")
     up = up_nib.get_data().squeeze().astype(floating)
     down = down_nib.get_data().squeeze().astype(floating)
-    up *= 1.0/up.mean()
-    down *= 1.0/down.mean()
+    up *= 2.0/up.mean()
+    down *= 2.0/down.mean()
 
     up_affine = up_nib.get_affine()
     up_affine_inv = np.linalg.inv(up_affine)
@@ -101,28 +102,14 @@ def test_andersson_new_subsample():
     resampled_sp = 2.0 * reg_sp
     resampled_affine = get_diag_affine(resampled_sp)
 
-    fwhm = np.ones(3) * 8.0
-    sigma_mm = fwhm / (np.sqrt(8.0 * np.log(2)))
-    sigma_vox = sigma_mm/resampled_sp
+
 
     #subsample by 2
     sub_up = vfu.downsample_scalar_field_3d(resampled_up.astype(floating))
     sub_down = vfu.downsample_scalar_field_3d(resampled_down.astype(floating))
 
-    current_up = sp.ndimage.filters.gaussian_filter(sub_up, sigma_vox)
-    current_down = sp.ndimage.filters.gaussian_filter(sub_down, sigma_vox)
-    current_shape = np.array(current_up.shape, dtype=np.int32)
-    current_sp = resampled_sp
-    current_affine = get_diag_affine(current_sp)
-    current_affine_inv = np.linalg.inv(current_affine)
-
-
     d_up = np.array([0, 1, 0], dtype=np.float64)
     d_down = np.array([0, -1, 0], dtype=np.float64)
-
-    dcurrent_up = gr.der_y(current_up)
-    dcurrent_down = gr.der_y(current_down)
-
 
     l1 = 0.01
     l2 = 0.01
@@ -134,18 +121,36 @@ def test_andersson_new_subsample():
     prev_energy=None
 
     # Instanciate a spline field to fit the reference volume grid
-    kspacing = np.array([2,2,2], dtype=np.int32)
-    field = gr.SplineField(current_shape, kspacing)
+    kspacing = np.array([6,6,6], dtype=np.int32)
+    field = gr.SplineField(sub_up.shape, kspacing)
+    #field = splines.CubicSplineField(sub_up.shape, kspacing)
     b_coeff = np.zeros(field.num_coefficients())
     field.copy_coefficients(b_coeff)
     b = field.get_volume()
     b=b.astype(floating)
 
-    orig_sp = current_sp
+    #smooth_params = [8.0, 6.0, 4.0, 3.0]
+    smooth_params = [8.0]
     #if True:
-    for it in range(5):
+    for it in range(5 * len(smooth_params)):
         #d = b/current_sp[1]
         d = b
+
+        if it % 5 == 0:
+            # Smooth and derive
+            fwhm = np.ones(3) * smooth_params[it//5]
+            sigma_mm = fwhm / (np.sqrt(8.0 * np.log(2)))
+            sigma_vox = sigma_mm/resampled_sp
+
+            current_up = sp.ndimage.filters.gaussian_filter(sub_up, sigma_vox)
+            current_down = sp.ndimage.filters.gaussian_filter(sub_down, sigma_vox)
+            dcurrent_up = gr.der_y(current_up)
+            dcurrent_down = gr.der_y(current_down)
+
+            current_shape = np.array(current_up.shape, dtype=np.int32)
+            current_sp = resampled_sp
+            current_affine = get_diag_affine(current_sp)
+            current_affine_inv = np.linalg.inv(current_affine)
 
         w_up = gr.warp_with_orfield(current_up, d, d_up, None, None, None, current_shape)
         w_down = gr.warp_with_orfield(current_down, d, d_down, None, None, None, current_shape)

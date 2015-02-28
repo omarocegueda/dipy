@@ -109,7 +109,8 @@ for modulename, other_sources, language in (
     ('dipy.align.bundlemin', [], 'c'),
     ('dipy.align.transforms', [], 'c'),
     ('dipy.align.parzenhist', [], 'c'),
-    ('dipy.correct.gradients', [], 'c')):
+    ('dipy.correct.gradients', [], 'c'),
+    ('dipy.correct.splines', [], 'c')):
 
     pyx_src = pjoin(*modulename.split('.')) + '.pyx'
     EXTS.append(Extension(modulename, [pyx_src] + other_sources,
