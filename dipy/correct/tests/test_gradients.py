@@ -72,8 +72,8 @@ def get_preprocessed_data(levels, use_extend_volume = True):
 def topup():
     from dipy.correct.splines import CubicSplineField
     # Prameters
-    up_fname = "b0_blipup.nii"
-    down_fname = "b0_blipdown.nii"
+    up_fname = "b0_blipup.nii.gz"
+    down_fname = "b0_blipdown.nii.gz"
     d_up = np.array([0, 1, 0], dtype=np.float64)
     d_down = np.array([0, -1, 0], dtype=np.float64)
 
@@ -89,8 +89,8 @@ def topup():
     max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 20, 20], dtype=np.int32)
 
     # Start
-    up_nib = nib.load("b0_blipup.nii")
-    down_nib = nib.load("b0_blipdown.nii")
+    up_nib = nib.load(up_fname)
+    down_nib = nib.load(down_fname)
     up = up_nib.get_data().squeeze().astype(floating)
     down = down_nib.get_data().squeeze().astype(floating)
     up *= 1.0/up.mean()
@@ -228,6 +228,7 @@ def topup():
 
             ncoeff = field.num_coefficients()
             JtJ = sp.sparse.csr_matrix((data, indices, indptr), shape=(ncoeff, ncoeff))
+            print(">>>%f, %f", JtJ.min(), JtJ.max())
 
             # Add the bending energy
             bgrad, bdata, bindices, bindptr = field.spline3d.get_bending_system(field.coef, current_sp)
@@ -236,12 +237,13 @@ def topup():
             bindices = np.array(bindices)
             bindptr = np.array(bindptr)
             bhessian = sp.sparse.csr_matrix((bdata, bindices, bindptr), shape=(ncoeff, ncoeff))
+            print(">>>%f, %f", bhessian.min(), bhessian.max())
 
             Jth += bgrad * l2
             JtJ += bhessian * l2
 
 
-            x, info = sp.sparse.linalg.cg(JtJ, -1.0*Jth, x0=b_coeff, tol=1e-3, maxiter=500)
+            x, info = sp.sparse.linalg.cg(JtJ, -1.0*Jth, tol=1e-3, maxiter=500)
             if info < 0:
                 raise ValueError("Illegal input or breakdown")
             elif info > 0:

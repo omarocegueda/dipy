@@ -572,9 +572,9 @@ cdef double _mult_overlapping_splines(double[:,:] Jt, int[:] kspacing,
     return prod
 
 
-cdef void _JtJ(double[:,::1] Jt, int[::1] kspacing, int[::1] kshape,
-               Py_ssize_t[::1] kernel_shape, double[::1] JtJ,
-               int[::1] indices, int[::1] indptr, double tau=0):
+cdef void _JtJ(double[:,:] Jt, int[:] kspacing, int[:] kshape,
+               Py_ssize_t[:] kernel_shape, double[:] JtJ,
+               int[:] indices, int[:] indptr, double tau=0):
     r""" Returns JtJ + tau*Id
     """
     cdef:
@@ -619,11 +619,11 @@ cdef void _JtJ(double[:,::1] Jt, int[::1] kspacing, int[::1] kshape,
 
 
 
-def gauss_newton_system_andersson(floating[:,:,::1] fp, floating[:,:,::1] fm,
-                                  floating[:,:,::1] dfp, floating[:,:,::1] dfm,
-                                  int[:,:,::1] mp, int[:,:,::1] mm,
-                                  double[:,:,::1] kernel, double[:,:,::1] dkernel,
-                                  floating[:,:,::1] db, int[::1] kspacing, int[::1] kshape,
+def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
+                                  floating[:,:,:] dfp, floating[:,:,:] dfm,
+                                  int[:,:,:] mp, int[:,:,:] mm,
+                                  double[:,:,:] kernel, double[:,:,:] dkernel,
+                                  floating[:,:,:] db, int[:] kspacing, int[:] kshape,
                                   double l1, double l2):
     cdef:
         # Image grid size
@@ -659,11 +659,11 @@ def gauss_newton_system_andersson(floating[:,:,::1] fp, floating[:,:,::1] fm,
         # Containers for energy computation
         double energy, residual, derivative
 
-        double[:,::1] Jt = np.zeros((ncoeff, kernel_size), dtype=np.float64, order='C')
-        double[::1] JtJ = np.zeros(ncoeff * 343, dtype=np.float64, order='C')
-        double[::1] Jth = np.zeros(ncoeff, dtype=np.float64, order='C')
-        int[::1] indices = np.ndarray(ncoeff * 343, dtype=np.int32, order='C')
-        int[::1] indptr = np.ndarray(1 + ncoeff, dtype=np.int32, order='C')
+        double[:,:] Jt = np.zeros((ncoeff, kernel_size), dtype=np.float64)
+        double[:] JtJ = np.zeros(ncoeff * 343, dtype=np.float64)
+        double[:] Jth = np.zeros(ncoeff, dtype=np.float64)
+        int[:] indices = np.ndarray(ncoeff * 343, dtype=np.int32)
+        int[:] indptr = np.ndarray(1 + ncoeff, dtype=np.int32)
 
     with nogil:
         # voxel- and coefficient- indices  are in lexicographical order:
