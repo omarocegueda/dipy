@@ -5,7 +5,7 @@
 import numpy as np
 cimport cython
 from dipy.align.fused_types cimport floating
-from dipy.align.splines import CubicSplineField
+from dipy.correct.splines import CubicSplineField
 
 cdef extern from "math.h":
     double sqrt(double x) nogil
@@ -122,6 +122,7 @@ cdef inline int interpolate_scalar_trilinear(floating[:,:,:] volume,
         jj -= 1
         if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
             out[0] += calpha * beta * cgamma * volume[kk, ii, jj]
+    return 1
 
 
 def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
@@ -149,8 +150,8 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
         nrows = b.shape[1]
         ncols = b.shape[2]
 
-    cdef floating[:, :, :] warped = np.zeros(shape=(nslices, nrows, ncols),
-                                             dtype=ftype)
+    cdef floating[:, :, :] warped = np.zeros(shape=(nslices, nrows, ncols), dtype=ftype)
+    cdef int[:, :, :] mask = np.zeros(shape=(nslices, nrows, ncols), dtype=np.int32)
 
     with nogil:
 
@@ -197,9 +198,9 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                         dii = di + i
                         djj = dj + j
 
-                    inside = interpolate_scalar_trilinear(f, dkk, dii, djj,
+                    mask[k,i,j] = interpolate_scalar_trilinear(f, dkk, dii, djj,
                                                           &warped[k,i,j])
-    return warped
+    return warped, mask
 
 
 
@@ -516,7 +517,7 @@ def gauss_newton_system_holland(floating[:,:,:] fp, floating[:,:,:] fm,
     return Jth, JtJ, indices, indptr
 
 
-cdef void _overlap_offsets(int idx0, int idx1, int kspacing, int sp_len,
+cdef inline void _overlap_offsets(int idx0, int idx1, int kspacing, int sp_len,
                            int *begin0, int *begin1, int *overlap_len) nogil:
     if idx0 < idx1: # then idx0-th spline requires offset
         begin0[0] = (idx1 - idx0) * kspacing
@@ -571,9 +572,9 @@ cdef double _mult_overlapping_splines(double[:,:] Jt, int[:] kspacing,
     return prod
 
 
-cdef void _JtJ(double[:,:] Jt, int[:] kspacing, int[:] kshape,
-               Py_ssize_t[:] kernel_shape, double[:] JtJ,
-               int[:] indices, int[:] indptr, double tau=0):
+cdef void _JtJ(double[:,::1] Jt, int[::1] kspacing, int[::1] kshape,
+               Py_ssize_t[::1] kernel_shape, double[::1] JtJ,
+               int[::1] indices, int[::1] indptr, double tau=0):
     r""" Returns JtJ + tau*Id
     """
     cdef:
@@ -618,17 +619,13 @@ cdef void _JtJ(double[:,:] Jt, int[:] kspacing, int[:] kshape,
 
 
 
-def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
-                                  floating[:,:,:] dfp, floating[:,:,:] dfm,
-                                  double[:,:,:] kernel, double[:,:,:] dkernel,
-                                  floating[:,:,:] db, int[:] kspacing, int[:] kshape,
+def gauss_newton_system_andersson(floating[:,:,::1] fp, floating[:,:,::1] fm,
+                                  floating[:,:,::1] dfp, floating[:,:,::1] dfm,
+                                  int[:,:,::1] mp, int[:,:,::1] mm,
+                                  double[:,:,::1] kernel, double[:,:,::1] dkernel,
+                                  floating[:,:,::1] db, int[::1] kspacing, int[::1] kshape,
                                   double l1, double l2):
     cdef:
-        int NUM_NEIGHBORS = 6
-        int[:] dSlice = np.array([-1,  0, 0, 0,  0, 1], dtype=np.int32)
-        int[:] dRow = np.array([0, -1, 0, 1,  0, 0], dtype=np.int32)
-        int[:] dCol = np.array([0,  0, 1, 0, -1, 0], dtype=np.int32)
-
         # Image grid size
         int ns = fp.shape[0]
         int nr = fp.shape[1]
@@ -658,15 +655,15 @@ def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
         # Kernel cell corresponding to the first voxel affected by spline [i,j,k]
         int koff, joff, ioff
         # Iterators over the sparse Jacobian
-        int row, col, cell_count
+        int row, col, cell_count, vindex
         # Containers for energy computation
         double energy, residual, derivative
 
-        double[:,:] Jt = np.zeros((ncoeff, kernel_size), dtype=np.float64)
-        double[:] JtJ = np.zeros(ncoeff * 343, dtype=np.float64)
-        double[:] Jth = np.zeros(ncoeff, dtype=np.float64)
-        int[:] indices = np.ndarray(ncoeff * 343, dtype=np.int32)
-        int[:] indptr = np.ndarray(1 + ncoeff, dtype=np.int32)
+        double[:,::1] Jt = np.zeros((ncoeff, kernel_size), dtype=np.float64, order='C')
+        double[::1] JtJ = np.zeros(ncoeff * 343, dtype=np.float64, order='C')
+        double[::1] Jth = np.zeros(ncoeff, dtype=np.float64, order='C')
+        int[::1] indices = np.ndarray(ncoeff * 343, dtype=np.int32, order='C')
+        int[::1] indptr = np.ndarray(1 + ncoeff, dtype=np.int32, order='C')
 
     with nogil:
         # voxel- and coefficient- indices  are in lexicographical order:
@@ -696,6 +693,8 @@ def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
                                            fm[kk,ii,jj] * (1 - db[kk,ii,jj])
                                 # The index of voxel [kk,ii,jj]
                                 vindex = (kk*nr + ii)*nc + jj
+                                if (mp[kk,ii,jj] == 0) or (mm[kk,ii,jj] == 0):
+                                    continue
 
                                 # The index of the spline component [sk,si,sj]
                                 col = (sk * len_r + si) * len_c + sj
@@ -713,16 +712,26 @@ def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
                                 cell_count += 1
                     row += 1
         energy = 0
+        nvox = 0
         for k in range(ns):
             for i in range(nr):
                 for j in range(nc):
+                    if (mp[k, i, j] == 0) or (mm[k, i, j] == 0):
+                        continue
                     residual = fp[k,i,j] * (1 + db[k,i,j]) -\
                                fm[k,i,j] * (1 - db[k,i,j])
                     energy += residual * residual
+                    nvox += 1
+        #for i in range(ncoeff):
+        #   Jth[i] *= 2.0/nvox
 
     _JtJ(Jt, kspacing, kshape, kernel.shape, JtJ, indices, indptr, l1)
-    print("Energy: %f"%(energy,))
-    return Jth, JtJ, indices, indptr
+    #with nogil:
+    #    for i in range(ncoeff * 343):
+    #        JtJ[i] *= 2.0/(nvox*nvox)
+
+    energy /= nvox
+    return Jth, JtJ, indices, indptr, energy
 
 
 def test_gauss_newton_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
@@ -833,6 +842,21 @@ cpdef wrap_scalar_field(double[:] v, int[:] sh):
                     vol[k,i,j] = v[idx]
                     idx += 1
     return vol
+
+
+cpdef unwrap_scalar_field(double[:,:,:] v):
+    cdef:
+        int n = v.shape[0] * v.shape[1] * v.shape[2]
+        double[:] out = np.ndarray(n, dtype=np.float64)
+        int i, j, k, idx
+    with nogil:
+        idx = 0
+        for k in range(v.shape[0]):
+            for i in range(v.shape[1]):
+                for j in range(v.shape[2]):
+                    out[idx] = v[k,i,j]
+                    idx += 1
+    return out
 
 
 def resample_orfield(floating[:, :, :] b, double[:] factors, int[:] target_shape):

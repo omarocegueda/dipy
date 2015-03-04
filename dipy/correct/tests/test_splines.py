@@ -40,9 +40,9 @@ def test_spline3d():
 
     spline = splines.Spline3D(sx, sy, sz)
 
-    x = np.array(range(51), dtype=np.float64)*0.1
-    y = np.array(range(61), dtype=np.float64)*0.1
-    z = np.array(range(71), dtype=np.float64)*0.1
+    x = np.array(range(51), dtype=np.float64)*0.08
+    y = np.array(range(61), dtype=np.float64)*0.08
+    z = np.array(range(71), dtype=np.float64)*0.08
     xyz = np.sin(x)[:,None, None]*np.sin(y)[None, :, None]*np.sin(z)[None,None,:]
     rt.plot_slices(xyz)
 
