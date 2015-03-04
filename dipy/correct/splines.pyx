@@ -592,7 +592,7 @@ cdef class Spline3D:
 
     def evaluate(self, double[:,:,:] coefs, int[:] shape, ders=None):
         cdef:
-            double[:,:,:] out = np.ndarray((shape[0], shape[1], shape[2]),
+            double[:,:,:] out = np.zeros((shape[0], shape[1], shape[2]),
                                            dtype=np.float64)
         if ders is None:
             ders = np.array([0,0,0], dtype=np.int32)
@@ -813,9 +813,9 @@ cdef class Spline3D:
                              self.sy._num_overlapping() *\
                              self.sz._num_overlapping()
             int max_nz = ncoef * n_overlaps
-            double[:] data = np.ndarray(max_nz, dtype=np.float64)
-            int[:] indices = np.ndarray(max_nz, dtype=np.int32)
-            int[:] indptr = np.ndarray(ncoef + 1, dtype=np.int32)
+            double[:] data = np.zeros(max_nz, dtype=np.float64)
+            int[:] indices = np.zeros(max_nz, dtype=np.int32)
+            int[:] indptr = np.zeros(ncoef + 1, dtype=np.int32)
 
         self._get_bending_system(coef, vox_size, grad, data, indices, indptr)
 
@@ -863,7 +863,7 @@ class CubicSplineField:
         nkz = sz._knots_needed(vol_shape[2])
 
         self.spline3d = Spline3D(sx, sy, sz)
-        self.grid_shape = np.array([nkx, nky, nkz])
+        self.grid_shape = np.array([nkx, nky, nkz], dtype=np.int32)
         self.vol_shape = vol_shape
         self.kspacing = kspacing
 
