@@ -5,7 +5,6 @@ from numpy.testing import (assert_equal,
                            assert_array_equal,
                            assert_array_almost_equal,
                            assert_raises)
-import matplotlib.pyplot as plt
 import dipy.align.imwarp as imwarp
 import dipy.align.metrics as metrics
 import dipy.align.vector_fields as vfu
@@ -15,7 +14,6 @@ import nibabel as nib
 import nibabel.eulerangles as eulerangles
 from dipy.align.imwarp import DiffeomorphicMap
 from dipy.align import VerbosityLevels
-import dipy.viz.regtools as rt
 import scipy as sp
 import scipy
 import scipy.sparse
@@ -23,6 +21,7 @@ import scipy.sparse.linalg
 import dipy.correct.gradients as gr
 import dipy.correct.splines as splines
 
+import dipy.viz.regtools as rt
 
 def get_diag_affine(sp):
     A = np.eye(4)
@@ -258,8 +257,9 @@ def topup():
             b = field.get_volume()
             b=b.astype(floating)
 
-        rt.overlay_slices(w_up, w_down, slice_type=2)
-        rt.plot_slices(b)
+        #rt.overlay_slices(w_up, w_down, slice_type=2)
+        #rt.plot_slices(b)
+    return field, w_up, w_down
 
 
 
