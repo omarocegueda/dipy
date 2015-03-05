@@ -72,21 +72,21 @@ def get_preprocessed_data(levels, use_extend_volume = True):
 def topup():
     from dipy.correct.splines import CubicSplineField
     # Prameters
-    up_fname = "b0_blipup.nii.gz"
-    down_fname = "b0_blipdown.nii.gz"
+    up_fname = "b0_blipup.nii"
+    down_fname = "b0_blipdown.nii"
     d_up = np.array([0, 1, 0], dtype=np.float64)
     d_down = np.array([0, -1, 0], dtype=np.float64)
 
-    nstages = 7
+    nstages = 9
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0], dtype=np.float64)
     warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
     subsampling = np.array([2, 2, 2, 2, 2, 1, 1, 1, 1], dtype=np.int32)
     lambda1 = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
     #lambda2 = np.array([5e-3, 1e-3, 1e-4, 1.5e-5, 5e-6, 5e-7, 5e-8, 5e-10, 1e-11])
-    lambda2 = np.array([5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1])
+    lambda2 = np.array([5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-2, 5e-2, 5e-2])
+    max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 10, 10], dtype=np.int32)
     #max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 20, 20], dtype=np.int32)
-    #max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 20, 20], dtype=np.int32)
-    max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 20, 20], dtype=np.int32)
+    #max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 20, 20], dtype=np.int32)
 
     # Start
     up_nib = nib.load(up_fname)
@@ -133,7 +133,7 @@ def topup():
         resampled_affine = get_diag_affine(resampled_sp)
 
         l1 = lambda1[stage]
-        l2 = lambda2[stage] * 10.0
+        l2 = lambda2[stage] * 10
         # get the spline resolution from millimeters to voxels
         kspacing = np.round(warp_res[stage]/resampled_sp).astype(np.int32)
         kspacing[kspacing<1] = 1
@@ -200,10 +200,10 @@ def topup():
             w_down, mask_down = gr.warp_with_orfield(current_down, d, d_down, None, None, None, current_shape)
             w_up = np.array(w_up)
             w_down = np.array(w_down)
-            if it == 0: # Plot initial state
-                if b.max() > b.min():
-                    rt.plot_slices(b)
-                rt.overlay_slices(w_up, w_down, slice_type=2)
+            #if it == 0: # Plot initial state
+            #    if b.max() > b.min():
+            #        rt.plot_slices(b)
+            #    rt.overlay_slices(w_up, w_down, slice_type=2)
 
             dw_up, dmask_up = gr.warp_with_orfield(dcurrent_up, d, d_up, None, None, None, current_shape)
             dw_down, dmask_down = gr.warp_with_orfield(dcurrent_down, d, d_down, None, None, None, current_shape)
@@ -228,7 +228,7 @@ def topup():
 
             ncoeff = field.num_coefficients()
             JtJ = sp.sparse.csr_matrix((data, indices, indptr), shape=(ncoeff, ncoeff))
-            print(">>>%f, %f", JtJ.min(), JtJ.max())
+            #print(">>>%f, %f"%(JtJ.min(), JtJ.max()) )
 
             # Add the bending energy
             bgrad, bdata, bindices, bindptr = field.spline3d.get_bending_system(field.coef, current_sp)
@@ -237,7 +237,7 @@ def topup():
             bindices = np.array(bindices)
             bindptr = np.array(bindptr)
             bhessian = sp.sparse.csr_matrix((bdata, bindices, bindptr), shape=(ncoeff, ncoeff))
-            print(">>>%f, %f", bhessian.min(), bhessian.max())
+            #print(">>>%f, %f"%(bhessian.min(), bhessian.max()))
 
             Jth += bgrad * l2
             JtJ += bhessian * l2
