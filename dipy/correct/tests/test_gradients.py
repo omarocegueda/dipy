@@ -34,7 +34,7 @@ def extend_volume(vol, margin):
     dims += 2*margin
     new_vol = np.zeros(tuple(dims))
     new_vol[margin:-margin, margin:-margin, margin:-margin] = vol[...]
-    return new_vol
+    return new_vol.astype(vol.dtype)
 
 
 def get_preprocessed_data(levels, use_extend_volume = True):
@@ -71,27 +71,32 @@ def get_preprocessed_data(levels, use_extend_volume = True):
 def topup():
     from dipy.correct.splines import CubicSplineField
     # Prameters
-    up_fname = "b0_blipup.nii"
-    down_fname = "b0_blipdown.nii"
+    data_dir = 'D:/opt/registration/data/topup_example/'
+    up_fname = data_dir + "b0_blipup.nii"
+    down_fname = data_dir + "b0_blipdown.nii"
     d_up = np.array([0, 1, 0], dtype=np.float64)
     d_down = np.array([0, -1, 0], dtype=np.float64)
 
-    nstages = 9
+    nstages = 8
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0], dtype=np.float64)
     warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
     subsampling = np.array([2, 2, 2, 2, 2, 1, 1, 1, 1], dtype=np.int32)
     lambda1 = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
-    #lambda2 = np.array([5e-3, 1e-3, 1e-4, 1.5e-5, 5e-6, 5e-7, 5e-8, 5e-10, 1e-11])
-    lambda2 = np.array([5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-1, 5e-2, 5e-2, 5e-2])
+    lambda2 = np.array([5e-3, 1e-3, 1e-4, 1.5e-5, 5e-6, 5e-7, 5e-8, 5e-8, 1e-8])
+    #lambda2 = np.array([10, 200, 5, 5, 5, 5, 5, 5e-1, 5e-1, 5e-1])
     max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 10, 10], dtype=np.int32)
     #max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 20, 20], dtype=np.int32)
     #max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 20, 20], dtype=np.int32)
 
-    # Start
+    # Read and scale data
     up_nib = nib.load(up_fname)
     down_nib = nib.load(down_fname)
     up = up_nib.get_data().squeeze().astype(floating)
     down = down_nib.get_data().squeeze().astype(floating)
+
+    #up = extend_volume(up, 10)
+    #down = extend_volume(down, 10)
+
     up *= 1.0/up.mean()
     down *= 1.0/down.mean()
 
@@ -131,8 +136,9 @@ def topup():
         resampled_sp = subsampling[stage] * reg_sp
         resampled_affine = get_diag_affine(resampled_sp)
 
-        l1 = lambda1[stage]
-        l2 = lambda2[stage] * 10
+        l1 = lambda1[stage] * 1000
+        #l2 = lambda2[stage] * 500000
+        l2 = lambda2[stage] * 1000000
         # get the spline resolution from millimeters to voxels
         kspacing = np.round(warp_res[stage]/resampled_sp).astype(np.int32)
         kspacing[kspacing<1] = 1
@@ -175,7 +181,8 @@ def topup():
         else:
             print ("Keeping field as is")
 
-
+        print("Field coef:", field.coef.shape)
+        print("Vol shape:", field.vol_shape)
         # Preprocess subsamled images
 
 
@@ -189,14 +196,32 @@ def topup():
         current_affine = get_diag_affine(current_sp)
         current_affine_inv = np.linalg.inv(current_affine)
 
+        # Scale the derivatives to mm^{-1}
+        #dcurrent_up /= current_sp[1]
+        #dcurrent_down /= current_sp[1]
+
+
         # Iterate
         #if True:
         #    it = 0
         for it in range(max_iter[stage]):
             print("Iter: %d / %d"%(it + 1, max_iter[stage]))
             d = b
-            w_up, mask_up= gr.warp_with_orfield(current_up, d, d_up, None, None, None, current_shape)
-            w_down, mask_down = gr.warp_with_orfield(current_down, d, d_down, None, None, None, current_shape)
+            # We want to sample at a grid with current_shape shape,
+            # The grid-to-space transform is diag(current_sp)
+            curr_aff = get_diag_affine(current_sp)
+            #The shape of the displacement field grid is the same as current_shape
+            b_aff = curr_aff
+            # current images' grids are also the same
+            f_aff = curr_aff
+            disp_aff = np.linalg.inv(curr_aff)
+            # We want to sample: f[ curr_aff^{-1} * curr_aff*x + curr_aff^{-1}*b[curr_aff^{-1}*(curr_aff*x)] ]
+            # which is: f[ x + curr_aff^{-1}*b[x] ], the displacement affine is the inverse of curr_aff
+            disp_aff = None
+            w_up, mask_up= gr.warp_with_orfield(current_up, d, d_up, None, None, disp_aff, current_shape)
+            w_down, mask_down = gr.warp_with_orfield(current_down, d, d_down, None, None, disp_aff, current_shape)
+            mask_up[...] = 1
+            mask_down[...] = 1
             w_up = np.array(w_up)
             w_down = np.array(w_down)
             #if it == 0: # Plot initial state
@@ -208,9 +233,11 @@ def topup():
             dw_down, dmask_down = gr.warp_with_orfield(dcurrent_down, d, d_down, None, None, None, current_shape)
             db = field.get_volume((0,1,0))
             db = np.array(db).astype(floating)
+            #db /= current_sp[1]
 
             kernel = field.spline3d.get_kernel_grid((0,0,0))
             dkernel = field.spline3d.get_kernel_grid((0,1,0))
+            #dkernel /= current_sp[1]
             # Get the linear system
 
             Jth, data, indices, indptr, energy= \
@@ -218,12 +245,18 @@ def topup():
                                                  mask_up, mask_down,
                                                  kernel, dkernel, db, field.kspacing,
                                                  field.grid_shape, l1, l2)
-            print("Energy: %f"%(energy,))
 
             Jth = np.array(Jth)
             data = np.array(data)
             indices = np.array(indices)
             indptr = np.array(indptr)
+
+            # Divide by n
+            n = current_shape[0] * current_shape[1] * current_shape[2]
+            #Jth /= n
+            #data /= n
+            print("Energy: %f"%(energy,))
+
 
             ncoeff = field.num_coefficients()
             JtJ = sp.sparse.csr_matrix((data, indices, indptr), shape=(ncoeff, ncoeff))
@@ -257,8 +290,8 @@ def topup():
             b = field.get_volume()
             b=b.astype(floating)
 
-        #rt.overlay_slices(w_up, w_down, slice_type=2)
-        #rt.plot_slices(b)
+        rt.overlay_slices(w_up, w_down, slice_type=2)
+        rt.plot_slices(b)
     return field, w_up, w_down
 
 
@@ -351,7 +384,7 @@ def test_andersson_new_subsample():
             current_affine_inv = np.linalg.inv(current_affine)
 
         w_up, mask_up = gr.warp_with_orfield(current_up, d, d_up, None, None, None, current_shape)
-        w_down mask_down= gr.warp_with_orfield(current_down, d, d_down, None, None, None, current_shape)
+        w_down, mask_down= gr.warp_with_orfield(current_down, d, d_down, None, None, None, current_shape)
         w_up = np.array(w_up)
         w_down = np.array(w_down)
         if it == 0: # Plot initial state
@@ -622,3 +655,6 @@ def test_holland():
     #Jth_test, JtJ_test = gr.test_gauss_newton_holland(w_up, w_down, dw_up, dw_down, db, l1, l2)
     #dd = np.abs(JtJ - JtJ_test)
     #dd.max()
+
+if __name__ =="__main__":
+    topup()

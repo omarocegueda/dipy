@@ -619,6 +619,96 @@ cdef void _JtJ(double[:,:] Jt, int[:] kspacing, int[:] kshape,
 
 
 
+def _append_right(double[:] Hdata, int[:] Hindices, int[:] Hindptr,
+                  double[:] Rdata, int[:] Rindices, int[:] Rindptr,
+                  int n, int k):
+    r""" Append sparse matrix R to the right of H and R^T to the bottom
+    H is nxn
+    L is nxk
+    O will be (n+k)x(n+k)
+    The resulting sparse matrix will be of the form:
+
+                |  H   R |
+                | R^T  0 |
+
+    """
+    cdef:
+        int nnz = Hindices[n] + Rindices[n]
+        double[:] Odata = np.ndarray(nnz, dtype=np.float64)
+        int[:] Oindices = np.ndarray(nnz, dtype=np.int32)
+        int[:] Oindptr = np.ndarray(1+n+k, dtype=np.int32)
+        int i, j, p, q, r
+    with nogil:
+        p = 0
+        q = 0
+        r = 0
+        for i in range(n):
+            Oindptr[i] = r
+            # Copy H[i, ...]
+            for j in range(Hindptr[i], Hindptr[i+1]):
+                Odata[r] = Hdata[p]
+                Oindices[r] = Hindices[p]
+                p += 1
+                r += 1
+            # Copy R[i, ...]
+            for j in range(Rindptr[i], Rindptr[i+1]):
+                Odata[r] = Rdata[q]
+                Oindices[r] = Rindices[q]
+                q += 1
+                r += 1
+        Oindptr[n] = r
+    return Odata, Oindices, Oindptr
+
+
+def derivative_constraint(double[:,:,:] ckernel, int[:] ksp):
+    cdef:
+        int x, y, z, yside
+        int lx, ly, lz
+        int kx, ky, kz
+        int* mink = [0,0,0]
+        int* maxk = [0,0,0]
+        int cx, cy, cz
+        int col # Constraint index (index given to boundary voxel)
+        int coef_idx
+        double[:] data
+        int[:] indices
+        int[:] indptr
+    with nogil:
+        col = 0
+        for x in range(lx):
+            # Spline knots affecting x (-1 based)
+            mink[0] = x // ksp[0] - 1
+            maxk[0] = 1 + (x + ksp[0] - 1) // ksp[0] + 1
+
+            for yside in range(2):
+                y = yside * (ly-1) # 0 or ly-1
+                # Spline knots affecting x (-1 based)
+                mink[1] = y // ksp[1] - 1
+                maxk[1] = 1 + (y + ksp[1] - 1) // ksp[1] + 1
+
+                for z in range(lz):
+                    # Spline knots affecting x (-1 based)
+                    mink[2] = z // ksp[2] - 1
+                    maxk[2] = 1 + (z + ksp[2] - 1) // ksp[2] + 1
+
+                    for kx in range(mink[0], maxk[0]):
+                        for ky in range(mink[1], maxk[1]):
+                            for kz in range(mink[2], maxk[2]):
+                                cx = kx * ksp[0]
+                                cy = ky * ksp[1]
+                                cz = kz * ksp[2]
+                                ckernel[x - cx, y - cy, z - cz]
+
+
+
+                    col +=1
+
+
+
+
+
+
+
 def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
                                   floating[:,:,:] dfp, floating[:,:,:] dfm,
                                   int[:,:,:] mp, int[:,:,:] mm,
@@ -707,8 +797,8 @@ def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
                                     fp[kk,ii,jj] * dkernel[sk,si,sj] +\
                                     dfm[kk,ii,jj] * kernel[sk,si,sj] * (1-db[kk,ii,jj]) +\
                                     fm[kk,ii,jj] * dkernel[sk,si,sj]
-                                Jt[row, col] = derivative
-                                Jth[row] += derivative * residual
+                                Jt[row, col] = 2.0 * derivative
+                                Jth[row] += 2.0 * derivative * residual
                                 cell_count += 1
                     row += 1
         energy = 0
@@ -722,14 +812,7 @@ def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
                                fm[k,i,j] * (1 - db[k,i,j])
                     energy += residual * residual
                     nvox += 1
-        #for i in range(ncoeff):
-        #   Jth[i] *= 2.0/nvox
-
     _JtJ(Jt, kspacing, kshape, kernel.shape, JtJ, indices, indptr, l1)
-    #with nogil:
-    #    for i in range(ncoeff * 343):
-    #        JtJ[i] *= 2.0/(nvox*nvox)
-
     energy /= nvox
     return Jth, JtJ, indices, indptr, energy
 
