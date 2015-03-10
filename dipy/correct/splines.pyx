@@ -188,7 +188,7 @@ cdef class Spline:
         """
         cdef:
             int i, j, block_size
-            double x, dx
+            double x, dx, dx2
 
         self.kernel_size = self._kernel_size(kspacing)
         if self.kernel_size < 0: # It is probably the base class
@@ -212,11 +212,12 @@ cdef class Spline:
                 raise MemoryError()
 
         dx = 1.0 / kspacing
+        dx2 = dx * dx
         x = -1.0 * self.center * dx
         for i in range(self.kernel_size):
             self.splines[0][i] = self._kernel(x)
-            self.splines[1][i] = self._derivative(x)
-            self.splines[2][i] = self._second_derivative(x)
+            self.splines[1][i] = self._derivative(x) * dx
+            self.splines[2][i] = self._second_derivative(x) * dx2
             x += dx
 
 
@@ -795,7 +796,7 @@ cdef class Spline3D:
                                             idx = (ii - i + cx)*nny*nnz +\
                                                   (jj - j + cy)*nnz +\
                                                   (kk - k + cz)
-                                            grad[row] += 2.0 * sz_norm * coef[ii,jj,kk] * prods[idx]
+                                            grad[row] += mult * sz_norm * coef[ii,jj,kk] * prods[idx]
 
                                             data[cnt] += mult * sz_norm * prods[idx]
                                             indices[cnt] = col
