@@ -71,20 +71,21 @@ def get_preprocessed_data(levels, use_extend_volume = True):
 def topup():
     from dipy.correct.splines import CubicSplineField
     # Prameters
-    data_dir = 'D:/opt/registration/data/topup_example/'
+    #data_dir = 'D:/opt/registration/data/topup_example/'
+    data_dir = './'
     up_fname = data_dir + "b0_blipup.nii"
     down_fname = data_dir + "b0_blipdown.nii"
     d_up = np.array([0, 1, 0], dtype=np.float64)
     d_down = np.array([0, -1, 0], dtype=np.float64)
 
-    nstages = 8
+    nstages = 9
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0], dtype=np.float64)
     warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
     subsampling = np.array([2, 2, 2, 2, 2, 1, 1, 1, 1], dtype=np.int32)
-    lambda1 = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
-    lambda2 = np.array([5e-3, 1e-3, 1e-4, 1.5e-5, 5e-6, 5e-7, 5e-8, 5e-8, 1e-8])
+    lambda1 = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2])*2
+    lambda2 = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e1, 1])
     #lambda2 = np.array([10, 200, 5, 5, 5, 5, 5, 5e-1, 5e-1, 5e-1])
-    max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 10, 10], dtype=np.int32)
+    max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 10, 10], dtype=np.int32)
     #max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 20, 20], dtype=np.int32)
     #max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 20, 20], dtype=np.int32)
 
@@ -97,9 +98,40 @@ def topup():
     #up = extend_volume(up, 10)
     #down = extend_volume(down, 10)
 
-    up *= 1.0/up.mean()
-    down *= 1.0/down.mean()
+    #up *= 1.0/up.mean()
+    #down *= 1.0/down.mean()
 
+    # Create a sphere at the center of the images
+    r = np.min(up.shape) // 4
+    sphere = vfu.create_sphere(up.shape[0], up.shape[1], up.shape[2], r)
+    sphere = np.array(sphere, dtype=np.int32)
+    up_nz = up[sphere>0]
+    dn_nz = down[sphere>0]
+
+    try_new_scaling = True
+    if try_new_scaling:
+        mup = up_nz.mean()
+        sup = mup - up.min()
+        mdown = dn_nz.mean()
+        sdown = mdown - down.min()
+        if mup < mdown:
+            up = sdown*(up - mup)/sup + mdown
+            #down = (down - mdown)/sdown + mdown
+        else:
+            #up = (up - mup)/sup + mup
+            down = sup*(down - mdown)/sdown + mup
+        up /= 100
+        down /= 100
+        #up *= 1.0/up_nz.mean()
+        #down *= 1.0/
+    else:
+        up *= 1.0/up.mean()
+        down *= 1.0/down.mean()
+
+
+
+    print('up range: %f, %f'%(up.min(), up.max()) )
+    print('dn range: %f, %f'%(down.min(), down.max()) )
     up_affine = up_nib.get_affine()
     up_affine_inv = np.linalg.inv(up_affine)
     down_affine = down_nib.get_affine()
@@ -136,9 +168,8 @@ def topup():
         resampled_sp = subsampling[stage] * reg_sp
         resampled_affine = get_diag_affine(resampled_sp)
 
-        l1 = lambda1[stage] * 1000
-        #l2 = lambda2[stage] * 500000
-        l2 = lambda2[stage] * 1000000
+        l1 = lambda1[stage]
+        l2 = lambda2[stage]
         # get the spline resolution from millimeters to voxels
         kspacing = np.round(warp_res[stage]/resampled_sp).astype(np.int32)
         kspacing[kspacing<1] = 1
@@ -290,8 +321,8 @@ def topup():
             b = field.get_volume()
             b=b.astype(floating)
 
-        rt.overlay_slices(w_up, w_down, slice_type=2)
-        rt.plot_slices(b)
+        #rt.overlay_slices(w_up, w_down, slice_type=2)
+        #rt.plot_slices(b)
     return field, w_up, w_down
 
 
