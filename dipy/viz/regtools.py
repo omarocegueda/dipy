@@ -249,7 +249,7 @@ def plot_2d_diffeomorphic_map(mapping, delta = 10, fname = None,
     return warped_forward, warped_backward
 
 
-def plot_slices(V, slice_indices=None, fname=None):
+def plot_slices(V, slice_indices=None, fname=None, cmap=plt.cm.gray):
     r"""Plot 3 slices from the given volume: 1 sagital, 1 coronal and 1 axial
 
     Creates a figure showing the axial, coronal and sagital slices at the
@@ -284,13 +284,13 @@ def plot_slices(V, slice_indices=None, fname=None):
     #Plot the slices
     plt.figure()
     plt.subplot(1, 3, 1).set_axis_off()
-    plt.imshow(axial, cmap = plt.cm.gray, origin='lower')
+    plt.imshow(axial, cmap = cmap, origin='lower')
     plt.title('Axial')
     plt.subplot(1, 3, 2).set_axis_off()
-    plt.imshow(coronal, cmap = plt.cm.gray, origin='lower')
+    plt.imshow(coronal, cmap = cmap, origin='lower')
     plt.title('Coronal')
     plt.subplot(1, 3, 3).set_axis_off()
-    plt.imshow(sagital, cmap = plt.cm.gray, origin='lower')
+    plt.imshow(sagital, cmap = cmap, origin='lower')
     plt.title('Sagittal')
     
     #Save the figure if requested
