@@ -130,6 +130,7 @@ def affine_fit(double[:] x, double[:] y, int force_ref=-1):
     cdef:
         int n = x.shape[0]
         int m = y.shape[0]
+        int cnt = 0
         double s1, s2, t1, t2, p, mse
         double det0, det1, absdet0, absdet1
         int i, regression_reference
@@ -137,12 +138,17 @@ def affine_fit(double[:] x, double[:] y, int force_ref=-1):
         double[:] fit_y = np.ndarray(n, np.float64)
     if n != m:
         raise ValueError("Arrays must have the same length")
+    
     for i in range(n):
+        if x[i]==0 or y[i]==0:
+            continue;
+        cnt += 1
         s1 += x[i]
         s2 += x[i] * x[i]
         t1 += y[i]
         t2 += y[i] * y[i]
         p += x[i] * y[i]
+    n = cnt
 
     det0 = s2 * n - (s1 * s1)
     det1 = t2 * n - (t1 * t1)
@@ -163,7 +169,7 @@ def affine_fit(double[:] x, double[:] y, int force_ref=-1):
         alpha = (p - beta * t1) / t2
 
     mse = 0
-    for i in range(n):
+    for i in range(x.shape[0]):
         if regression_reference == 0:
             fit_x[i] = x[i]
             fit_y[i] = alpha * x[i] + beta
