@@ -4,7 +4,7 @@
 #cython: cdivision=True
 import numpy as np
 cimport cython
-from dipy.align.fused_types cimport floating
+from dipy.align.fused_types cimport floating, number
 from dipy.correct.splines import CubicSplineField
 
 cdef extern from "math.h":
@@ -125,6 +125,71 @@ cdef inline int interpolate_scalar_trilinear(floating[:,:,:] volume,
     return 1
 
 
+cdef inline int interpolate_scalar_nn_3d(number[:,:,:] volume, double dkk,
+                                         double dii, double djj,
+                                         number *out) nogil:
+    r"""Nearest-neighbor interpolation of a 3D scalar image
+
+    Interpolates the 3D image at (dkk, dii, djj) using nearest neighbor
+    interpolation and stores the result in out. If (dkk, dii, djj) is outside
+    the image's domain, zero is written to out instead.
+
+    Parameters
+    ----------
+    image : array, shape (S, R, C)
+        the input 2D image
+    dkk : float
+        the first coordinate of the interpolating position
+    dii : float
+        the second coordinate of the interpolating position
+    djj : float
+        the third coordinate of the interpolating position
+    out : array, shape (1,)
+        the variable which the interpolation result will be written to
+
+    Returns
+    -------
+    inside : int
+        if (dkk, dii, djj) is inside the domain of the image,
+        inside == 1, otherwise inside == 0
+    """
+    cdef:
+        int ns = volume.shape[0]
+        int nr = volume.shape[1]
+        int nc = volume.shape[2]
+        int kk, ii, jj
+        double alpha, beta, calpha, cbeta, gamma, cgamma
+    if not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1):
+        out[0] = 0
+        return 0
+    # find the top left index and the interpolation coefficients
+    kk = <int>floor(dkk)
+    ii = <int>floor(dii)
+    jj = <int>floor(djj)
+    # no one is affected
+    if not ((0 <= kk < ns) and (0 <= ii < nr) and (0 <= jj < nc)):
+        out[0] = 0
+        return 0
+    cgamma = dkk - kk
+    calpha = dii - ii
+    cbeta = djj - jj
+    alpha = 1 - calpha
+    beta = 1 - cbeta
+    gamma = 1 - cgamma
+    if(gamma < cgamma):
+        kk += 1
+    if(alpha < calpha):
+        ii += 1
+    if(beta < cbeta):
+        jj += 1
+    # no one is affected
+    if not ((0 <= kk < ns) and (0 <= ii < nr) and (0 <= jj < nc)):
+        out[0] = 0
+        return 0
+    out[0] = volume[kk, ii, jj]
+    return 1
+
+
 def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                         double[:, :] affine_idx_in=None,
                         double[:, :] affine_idx_out=None,
@@ -199,6 +264,84 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                         djj = dj + j
 
                     mask[k,i,j] = interpolate_scalar_trilinear(f, dkk, dii, djj,
+                                                          &warped[k,i,j])
+    return warped, mask
+
+
+def warp_with_orfield_nn(number[:,:,:] f, floating[:,:,:] b, double[:] dir,
+                         double[:, :] affine_idx_in=None,
+                         double[:, :] affine_idx_out=None,
+                         double[:, :] affine_disp=None,
+                         int[:] sampling_shape=None):
+    ftype=np.asarray(f).dtype
+    cdef:
+        int nslices = f.shape[0]
+        int nrows = f.shape[1]
+        int ncols = f.shape[2]
+        int nsVol = f.shape[0]
+        int nrVol = f.shape[1]
+        int ncVol = f.shape[2]
+        int i, j, k, inside
+        double dkk, dii, djj, dk, di, dj
+        floating tmp
+    if sampling_shape is not None:
+        nslices = sampling_shape[0]
+        nrows = sampling_shape[1]
+        ncols = sampling_shape[2]
+    elif b is not None:
+        nslices = b.shape[0]
+        nrows = b.shape[1]
+        ncols = b.shape[2]
+
+    cdef number[:, :, :] warped = np.zeros(shape=(nslices, nrows, ncols), dtype=ftype)
+    cdef int[:, :, :] mask = np.zeros(shape=(nslices, nrows, ncols), dtype=np.int32)
+
+    with nogil:
+
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    if affine_idx_in is None:
+                        dkk = dir[0] * b[k,i,j]
+                        dii = dir[1] * b[k,i,j]
+                        djj = dir[2] * b[k,i,j]
+                    else:
+                        dk = _apply_affine_3d_x0(
+                            k, i, j, 1, affine_idx_in)
+                        di = _apply_affine_3d_x1(
+                            k, i, j, 1, affine_idx_in)
+                        dj = _apply_affine_3d_x2(
+                            k, i, j, 1, affine_idx_in)
+                        inside = interpolate_scalar_trilinear(b, dk, di, dj, &tmp)
+                        dkk = dir[0] * tmp
+                        dii = dir[1] * tmp
+                        djj = dir[2] * tmp
+
+                    if affine_disp is not None:
+                        dk = _apply_affine_3d_x0(
+                            dkk, dii, djj, 0, affine_disp)
+                        di = _apply_affine_3d_x1(
+                            dkk, dii, djj, 0, affine_disp)
+                        dj = _apply_affine_3d_x2(
+                            dkk, dii, djj, 0, affine_disp)
+                    else:
+                        dk = dkk
+                        di = dii
+                        dj = djj
+
+                    if affine_idx_out is not None:
+                        dkk = dk + _apply_affine_3d_x0(k, i, j, 1,
+                                                       affine_idx_out)
+                        dii = di + _apply_affine_3d_x1(k, i, j, 1,
+                                                       affine_idx_out)
+                        djj = dj + _apply_affine_3d_x2(k, i, j, 1,
+                                                       affine_idx_out)
+                    else:
+                        dkk = dk + k
+                        dii = di + i
+                        djj = dj + j
+
+                    mask[k,i,j] = interpolate_scalar_nn_3d(f, dkk, dii, djj,
                                                           &warped[k,i,j])
     return warped, mask
 
