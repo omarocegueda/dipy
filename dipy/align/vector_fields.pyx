@@ -3152,8 +3152,8 @@ cdef void _gradient_3d(floating[:,:,:] img, double[:,:] img_affine_inv,
 
 
 cdef void _gradient_2d(floating[:,:] img, double[:,:] img_affine_inv,
-                       double[:] img_spacing, int[:] domain_shape,
-                       double[:,:] domain_affine, floating[:,:,:] out):
+                       double[:] img_spacing, double[:,:] domain_affine,
+                       floating[:,:,:] out):
     r""" Gradient of a 2D image in physical space coordinates
 
     Each grid cell (i, j) in the sampling domain (determined by
@@ -3185,8 +3185,8 @@ cdef void _gradient_2d(floating[:,:] img, double[:,:] img_affine_inv,
         the buffer in which to store the image gradient
     """
     cdef:
-        int nrows = domain_shape[0]
-        int ncols = domain_shape[1]
+        int nrows = out.shape[0]
+        int ncols = out.shape[1]
         int i, j, k, inside
         double tmp
         double[:] x = np.ndarray(shape=(2,), dtype=np.float64)
@@ -3257,11 +3257,9 @@ def gradient(img, img_affine_inv, img_spacing, domain_shape, domain_affine):
     if dim == 2:
         _gradient_2d(img, img_affine_inv.astype(np.float64),
                      img_spacing.astype(np.float64),
-                     np.array(domain_shape, dtype=np.int32),
                      domain_affine.astype(np.float64), out)
     else:
         _gradient_3d(img, img_affine_inv.astype(np.float64),
                      img_spacing.astype(np.float64),
-                     np.array(domain_shape, dtype=np.int32),
                      domain_affine.astype(np.float64), out)
     return out
