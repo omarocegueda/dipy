@@ -164,6 +164,58 @@ def setup_random_transform_2d(transform, rfactor):
     return static, moving, static_aff, moving_aff, smask, mmask, T
 
 
+def test_mi_gradient():
+    # Test the gradient of mutual information using MattesMIMetric,
+    # which extends MattesBase
+    h = 1e-5
+    factors = {('TRANSLATION', 2):2.0,
+               ('ROTATION', 2):0.1,
+               ('RIGID', 2):0.1,
+               ('SCALING', 2):0.01,
+               ('AFFINE', 2):0.1,
+               ('TRANSLATION', 3):2.0,
+               ('ROTATION', 3):0.2,
+               ('RIGID', 3):0.1,
+               ('SCALING', 3):0.1,
+               ('AFFINE', 3):0.1}
+    for ttype in factors.keys():
+        dim = ttype[1]
+        if dim == 2:
+            nslices = 1
+        else:
+            nslices = 45
+
+        transform = regtransforms[ttype]
+        factor = factors[ttype]
+        static, moving, static_aff, moving_aff, smask, mmask, T = \
+                        setup_random_transform(transform, factor, nslices, 5.0)
+        smask=None
+        mmask=None
+        theta = transform.get_identity_parameters().copy()
+        metric = MattesMIMetric(32)
+        spacing = np.ones(dim)
+
+        metric.setup(transform, static, moving, spacing, static_aff,moving_aff,
+                     smask, mmask, prealign=None, precondition=False)
+
+        # Compute the gradient with the implementation under test
+        val0, actual = metric.value_and_gradient(theta)
+        # Compute the gradient using finite-diferences
+        n = transform.get_number_of_parameters()
+        expected = np.empty_like(actual)
+        for i in range(n):
+            dtheta = theta.copy()
+            dtheta[i] += h
+            val1 = metric.distance(dtheta)
+            expected[i] = (val1 - val0) / h
+
+        dp = expected.dot(actual)
+        enorm = np.linalg.norm(expected)
+        anorm = np.linalg.norm(actual)
+        nprod = dp / (enorm * anorm)
+        assert_equal(nprod >= 0.999, True)
+
+
 def test_mattes_mi_registration_2d():
     factors = {('TRANSLATION', 2):25.0,
                ('ROTATION', 2):0.35,

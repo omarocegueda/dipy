@@ -24,15 +24,22 @@ cdef extern from "dpy_math.h" nogil:
 class MattesBase(object):
     def __init__(self, nbins):
         r""" MattesBase
-        Base class for the Mattes' Mutual Information metric
+        Base class for the Mattes' Mutual Information metric.
+        This implementation is not tied to any optimization (registration)
+        method, the idea is that a registration metric based on MI should
+        inherit from this class to perform the low-level computations of
+        the joint intensity distributions and its gradient w.r.t. the
+        transform parameters, and then communicate the results to the
+        appropriate optimizer.
 
         Notes: we need this class in cython to allow
-        _joint_pdf_gradient_dense_2d and _joint_pdf_gradient_dense_3d to receive
-        a pointer to a nogil function that computes the Jacobian of a transform,
-        which allows us to compute Jacobians inside a nogil loop.
+        _joint_pdf_gradient_dense_2d and _joint_pdf_gradient_dense_3d to
+        use a nogil Jacobian function (obtained from an instance of the
+        Transform class), which allows us to evaluate Jacobians at all
+        the sampling points (maybe the full grid) inside a nogil loop.
 
-        The reason we need a class is to encapsulate all the parameters related
-        to the joint and marginal distributions.
+        The reason we need a class is to encapsulate all the parameters
+        related to the joint and marginal distributions.
 
         Parameters
         ----------
@@ -96,7 +103,7 @@ class MattesBase(object):
         r""" Normalizes intensity x to the range covered by the static histogram
 
         If the input intensity is in [self.smin, self.smax] then the normalized
-        intensity will be in [self.padding, self.nbins - 1 - self.padding]
+        intensity will be in [self.padding, self.nbins - self.padding]
 
         Parameters
         ----------
@@ -115,7 +122,7 @@ class MattesBase(object):
         r""" Normalizes intensity x to the range covered by the moving histogram
 
         If the input intensity is in [self.mmin, self.mmax] then the normalized
-        intensity will be in [self.padding, self.nbins - 1 - self.padding]
+        intensity will be in [self.padding, self.nbins - self.padding]
 
         Parameters
         ----------
@@ -210,7 +217,7 @@ class MattesBase(object):
         theta: array, shape (n,)
             parameters of the transformation to compute the gradient from
         transform: instance of Transform
-            the transformation with respect to whose parameters the gradient 
+            the transformation with respect to whose parameters the gradient
             must be computed
         static: array, shape (S, R, C)
             static image
@@ -353,8 +360,10 @@ cdef inline double _bin_normalize(double x, double mval, double delta) nogil:
 
     (3) nx = (x - xmin) / delta + padding = x / delta - mval
 
-    This means that the observed intensity x must be between
-    bins padding and nbins-1-padding, although it may affect bins 0 to nbins-1.
+    This means that normalized intensity nx must lie in the closed interval
+    [padding, nbins-padding], which contains bins with indices
+    padding, padding+1, ..., nbins - 1 - padding (i.e., nbins - 2*padding bins)
+
     '''
     return x / delta - mval
 
@@ -392,22 +401,22 @@ cdef inline cnp.npy_intp _bin_index(double normalized, int nbins,
     return bin
 
 
-def cubic_spline(double[:] x, double[:] sx):
+def cubic_spline(double[:] x):
     r''' Evaluates the cubic spline at a set of values
 
     Parameters
     ----------
     x : array, shape (n)
         input values
-    sx : array, shape (n)
-        buffer in which to write the evaluated spline
     '''
     cdef:
         int i
         int n = x.shape[0]
+        double[:] sx = np.zeros(n, dtype=np.float64)
     with nogil:
         for i in range(n):
             sx[i] =  _cubic_spline(x[i])
+    return sx
 
 
 cdef inline double _cubic_spline(double x) nogil:
@@ -429,22 +438,22 @@ cdef inline double _cubic_spline(double x) nogil:
     return 0.0
 
 
-def cubic_spline_derivative(double[:] x, double[:] sx):
+def cubic_spline_derivative(double[:] x):
     r''' Evaluates the cubic spline derivative at a set of values
 
     Parameters
     ----------
     x : array, shape (n)
         input values
-    sx : array, shape (n)
-        buffer in which to write the evaluated spline derivative
     '''
     cdef:
         int i
         int n = x.shape[0]
+        double[:] sx = np.zeros(n, dtype=np.float64)
     with nogil:
         for i in range(n):
             sx[i] =  _cubic_spline_derivative(x[i])
+    return sx
 
 
 cdef inline double _cubic_spline_derivative(double x) nogil:
@@ -1037,7 +1046,7 @@ cdef _joint_pdf_gradient_sparse_3d(double[:] theta, Transform transform,
     theta: array, shape (n,)
         parameters to compute the gradient at
     transform: instance of Transform
-        the transformation with respect to whose parameters the gradient 
+        the transformation with respect to whose parameters the gradient
         must be computed
     sval: array, shape (m,)
         sampled intensities from the static image at sampled_points
