@@ -138,7 +138,7 @@ def affine_fit(double[:] x, double[:] y, int force_ref=-1):
         double[:] fit_y = np.ndarray(n, np.float64)
     if n != m:
         raise ValueError("Arrays must have the same length")
-    
+
     for i in range(n):
         if x[i]==0 or y[i]==0:
             continue;
@@ -318,3 +318,72 @@ def compute_cc_residuals_noboundary(double[:,:,:] I, double[:,:,:] J, int radius
                     residuals[s, r, c] /= wx
 
     return residuals
+
+
+def compute_transfer_system(int[:,:,:] labels, int nlabels, double[:,:,:] x, int radius):
+    cdef:
+        int ns = labels.shape[0]
+        int nr = labels.shape[1]
+        int nc = labels.shape[2]
+        int n = (2 * radius + 1) * (2 * radius + 1) * (2 * radius + 1)
+        int s, r, c
+        int k, i, j, start_k, end_k, start_i, end_i, start_j, end_j
+        int ndiff, ii, jj
+        double delta, contrib
+        double sx, sx2
+        int[:] K = np.ndarray((nlabels,), dtype=np.int32)
+        int[:] indices = np.ndarray((nlabels,), dtype=np.int32)
+        double[:] A = np.ndarray((nlabels,), dtype=np.float64)
+        double[:,:] S = np.zeros((nlabels-1, nlabels-1), dtype=np.float64)
+
+    with nogil:
+        for s in range(ns):
+            for r in range(nr):
+                for c in range(nc):
+                    A[:] = 0
+                    K[:] = 0
+                    # Compute stats for this window
+                    start_k = _int_max(0, s - radius)
+                    end_k = _int_min(ns, 1 + s + radius)
+                    for k in range(start_k, end_k):
+
+                        start_i = _int_max(0, r - radius)
+                        end_i = _int_min(nr, 1 + r + radius)
+                        for i in range(start_i, end_i):
+
+                            start_j = _int_max(0, c - radius)
+                            end_j = _int_min(nc, 1 + c + radius)
+                            for j in range(start_j, end_j):
+                                if labels[k, i, j] == 0:
+                                    continue
+                                sx += x[k, i, j]
+                                sx2 += x[k, i, j] * x[k, i, j]
+                                A[labels[k, i, j]-1] += x[k, i, j]
+                                K[labels[k, i, j]-1] += 1
+
+                    delta = n * sx2 - sx * sx
+
+                    if delta<1e-4:# too small
+                        continue
+
+                    # Look for present labels
+                    ndiff = 0
+                    for i in range(nlabels):
+                        if K[i] > 0:
+                            indices[ndiff] = i
+                            ndiff += 1
+
+                    # Add contribution of this window to the system
+                    for i in range(ndiff):
+                        ii = indices[i]
+                        # Product of equal columns
+                        contrib = K[ii] - (K[ii]*K[ii]*sx2 - 2*K[ii]*A[ii]*sx + n*A[ii]*A[ii]) / delta
+                        S[ii, ii] += contrib
+
+                        # Product of different columns
+                        for j in range(i+1, ndiff):
+                            jj = indices[j]
+                            contrib = (K[ii]*K[jj]*sx2 - (K[ii]*A[jj] + K[jj]*A[ii])*sx + n*A[ii]*A[jj]) / delta
+                            S[ii, jj] -= contrib
+                            S[jj, ii] -= contrib
+    return S
