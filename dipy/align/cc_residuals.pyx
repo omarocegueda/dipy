@@ -320,7 +320,7 @@ def compute_cc_residuals_noboundary(double[:,:,:] I, double[:,:,:] J, int radius
     return residuals
 
 
-def compute_transfer_system(int[:,:,:] labels, int nlabels, double[:,:,:] x, int radius):
+def compute_transfer_system_underdetermined(int[:,:,:] labels, int nlabels, double[:,:,:] x, int radius):
     cdef:
         int ns = labels.shape[0]
         int nr = labels.shape[1]
@@ -387,3 +387,85 @@ def compute_transfer_system(int[:,:,:] labels, int nlabels, double[:,:,:] x, int
                             S[ii, jj] -= contrib
                             S[jj, ii] -= contrib
     return S
+
+
+def compute_transfer_value_and_gradient(double[:] f, int[:,:,:] labels, int nlabels, double[:,:,:] x, int radius):
+    cdef:
+        int ns = labels.shape[0]
+        int nr = labels.shape[1]
+        int nc = labels.shape[2]
+        int n = (2 * radius + 1) * (2 * radius + 1) * (2 * radius + 1)
+        int s, r, c
+        int k, i, j, start_k, end_k, start_i, end_i, start_j, end_j
+        int cnt, nwindows
+        double energy, num, delta, contrib
+        double sx, sx2, alpha, beta, gamma
+        int[:] K = np.ndarray((nlabels,), dtype=np.int32)
+        double[:] A = np.ndarray((nlabels,), dtype=np.float64)
+        double[:] grad = np.ndarray((nlabels,), dtype=np.float64)
+        int req_mem
+
+    with nogil:
+        energy = 0
+        grad[:] = 0
+        nwindows = 0
+        req_mem = 0
+        for s in range(ns):
+            for r in range(nr):
+                for c in range(nc):
+                    A[:] = 0
+                    K[:] = 0
+                    # Compute stats for this window
+                    start_k = _int_max(0, s - radius)
+                    end_k = _int_min(ns, 1 + s + radius)
+                    sx = 0
+                    sx2 = 0
+                    cnt = 0
+                    for k in range(start_k, end_k):
+
+                        start_i = _int_max(0, r - radius)
+                        end_i = _int_min(nr, 1 + r + radius)
+                        for i in range(start_i, end_i):
+
+                            start_j = _int_max(0, c - radius)
+                            end_j = _int_min(nc, 1 + c + radius)
+                            for j in range(start_j, end_j):
+                                #if labels[k, i, j] == 0:
+                                #    continue
+                                sx += x[k, i, j]
+                                sx2 += x[k, i, j] * x[k, i, j]
+                                A[labels[k, i, j]] += x[k, i, j]
+                                K[labels[k, i, j]] += 1
+                                cnt += 1
+                    if cnt < n:
+                        continue
+                    # Compute f-stats
+                    alpha = 0
+                    beta = 0
+                    gamma = 0
+                    for i in range(0, nlabels):
+                        if(K[i]>0):
+                            req_mem += 2
+                        alpha += A[i] * f[i]
+                        beta += K[i] * f[i]
+                        gamma += K[i] * f[i] * f[i]
+
+                    delta = n * gamma - beta * beta
+                    
+                    if delta<1e-4:# too small
+                        continue
+
+                    nwindows += 1
+                    
+                    # Compute contribution of this window to the total energy
+                    num = n*alpha*alpha - 2.0*alpha*beta*sx + gamma*sx*sx
+                    energy += sx2 - num/delta
+                    
+                    # Compute contribution of this window to the gradient
+                    for i in range(0, nlabels):
+                        contrib = 2*(n*alpha*A[i] - sx*(alpha*K[i]+beta*A[i]) + sx*sx*K[i]*f[i])*delta - 2*num*(n*K[i]*f[i] - beta*K[i])
+                        grad[i] -= contrib/(delta*delta)
+        energy /= nwindows
+        for i in range(nlabels):
+            grad[i] /= nwindows
+    return energy, grad
