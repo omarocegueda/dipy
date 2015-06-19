@@ -5,17 +5,17 @@ from numpy.testing import (assert_array_equal,
                            assert_array_almost_equal,
                            assert_almost_equal,
                            assert_equal)
-from ...core import geometry as geometry
-from ...data import get_data
-from ...viz import regtools as rt
-from .. import floating
-from .. import vector_fields as vf
-from .. import imaffine
-from .. import mattes
-from ..imaffine import transform_image
-from ..transforms import (Transform,
+from dipy.core import geometry as geometry
+from dipy.data import get_data
+from dipy.viz import regtools as rt
+from dipy.align import floating
+from dipy.align import vector_fields as vf
+from dipy.align import imaffine
+from dipy.align import mattes
+from dipy.align.imaffine import transform_image
+from dipy.align.transforms import (Transform,
                           regtransforms)
-from .test_mattes import setup_random_transform
+from test_mattes import setup_random_transform
 
 # For each transform type, select a transform factor (indicating how large the
 # true transform between static and moving images will be) and a sampling
@@ -249,3 +249,5 @@ def test_affreg_defaults():
             reduction = 1 - end_sad / start_sad
             print("%s>>%f"%(ttype, reduction))
             assert(reduction > 0.9)
+
+test_affreg_all_transforms()
