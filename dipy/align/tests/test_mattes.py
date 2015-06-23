@@ -3,11 +3,11 @@ import scipy as sp
 import scipy.ndimage as ndimage
 from functools import reduce
 from operator import mul
-from ...core.ndindex import ndindex
-from ...data import get_data
-from .. import vector_fields as vf
-from ..transforms import regtransforms
-from ..mattes import (MattesBase,
+from dipy.core.ndindex import ndindex
+from dipy.data import get_data
+from dipy.align import vector_fields as vf
+from dipy.align.transforms import regtransforms
+from dipy.align.mattes import (MattesBase,
                       cubic_spline,
                       cubic_spline_derivative,
                       sample_domain_regular)

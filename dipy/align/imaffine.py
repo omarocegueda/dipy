@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.linalg as npl
+import scipy as sp
 import scipy.ndimage as ndimage
 from ..core.optimize import Optimizer
 from ..core.optimize import SCIPY_LESS_0_12
@@ -8,7 +9,8 @@ from . import VerbosityLevels
 from .mattes import MattesBase, sample_domain_regular
 from .imwarp import (get_direction_and_spacings, ScaleSpace)
 from .scalespace import IsotropicScaleSpace
-
+from .crosscorr import (cc_val_and_grad,
+                        precompute_cc_factors_3d)
 
 class AffineMap(object):
     def __init__(self, affine, domain_grid_shape=None, domain_grid2world=None,
@@ -570,6 +572,207 @@ class MattesMIMetric(MattesBase):
             return np.inf, self.metric_grad
         return -1 * self.metric_val, -1 * self.metric_grad
 
+
+class LocalCCMetric(object):
+    def __init__(self, radius):
+        self.radius = radius
+
+    def setup(self, transform, static, moving, static_grid2world=None,
+              moving_grid2world=None, starting_affine=None):
+        r""" Prepares the metric to compute CC and gradient
+
+        Parameters
+        ----------
+        transform: instance of Transform
+            the transformation with respect to whose parameters the gradient
+            must be computed
+        static : array, shape (S, R, C) or (R, C)
+            static image
+        moving : array, shape (S', R', C') or (R', C')
+            moving image. The dimensions of the static (S, R, C) and moving
+            (S', R', C') images do not need to be the same.
+        static_grid2world : array (dim+1, dim+1), optional
+            the grid-to-space transform of the static image. The default is
+            None, implying the transform is the identity.
+        moving_grid2world : array (dim+1, dim+1)
+            the grid-to-space transform of the moving image. The default is
+            None, implying the spacing along all axes is 1.
+        starting_affine : array, shape (dim+1, dim+1), optional
+            the pre-aligning matrix (an affine transform) that roughly aligns
+            the moving image towards the static image. If None, no
+            pre-alignment is performed. If a pre-alignment matrix is available,
+            it is recommended to provide this matrix as `starting_affine`
+            instead of manually transforming the moving image to reduce
+            interpolation artifacts. The default is None, implying no
+            pre-alignment is performed.
+        """
+        self.dim = len(static.shape)
+        if moving_grid2world is None:
+            moving_grid2world = np.eye(self.dim + 1)
+        if static_grid2world is None:
+            static_grid2world = np.eye(self.dim + 1)
+        self.transform = transform
+        self.static = np.array(static).astype(np.float64)
+        self.moving = np.array(moving).astype(np.float64)
+        self.static_grid2world = static_grid2world
+        self.static_world2grid = npl.inv(static_grid2world)
+        self.moving_grid2world = moving_grid2world
+        self.moving_world2grid = npl.inv(moving_grid2world)
+        self.static_direction, self.static_spacing = \
+            get_direction_and_spacings(static_grid2world, self.dim)
+        self.moving_direction, self.moving_spacing = \
+            get_direction_and_spacings(moving_grid2world, self.dim)
+        self.starting_affine = starting_affine
+
+        P = np.eye(self.dim + 1)
+        if self.starting_affine is not None:
+            P = self.starting_affine
+        if self.dim == 2:
+            self.interp_method = vf.interpolate_scalar_2d
+        else:
+            self.interp_method = vf.interpolate_scalar_3d
+
+
+        self.transformed = transform_image(self.static,
+                                           self.static_grid2world,
+                                           self.moving,
+                                           self.moving_grid2world, P)
+        self.transformed = self.transformed.astype(np.float64)
+
+    def _update(self, params, update_gradient=True):
+        r""" Updates marginal and joint distributions and the joint gradient
+
+        The distributions are updated according to the static and transformed
+        images. The transformed image is precisely the moving image after
+        transforming it by the transform defined by the params parameters.
+
+        The gradient of the joint PDF is computed only if update_gradient
+        is True.
+
+        Parameters
+        ----------
+        params : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+        update_gradient : Boolean, optional
+            if True, the gradient of the joint PDF will also be computed,
+            otherwise, only the marginal and joint PDFs will be computed.
+            The default is True.
+        """
+        # Get the matrix associated with the params parameter vector
+        M = self.transform.param_to_matrix(params)
+        if self.starting_affine is not None:
+            M = M.dot(self.starting_affine)
+
+        # Warp the moving image (dense case)
+        self.transformed = transform_image(self.static, self.static_grid2world,
+                                           self.moving, self.moving_grid2world, M)
+        self.transformed = self.transformed.astype(np.float64)
+        # Precompute CC factors
+        factors = precompute_cc_factors_3d(self.static.astype(np.float32), self.transformed.astype(np.float32),
+                                           self.radius)
+        factors = np.array(factors)
+        # Compute the gradient of the warped img. (it is now sampled at static's grid)
+        if True:
+            warped = np.array(self.transformed)
+            mgrad = np.empty(warped.shape+(self.dim,), dtype=np.float32)
+            for i, grad in enumerate(sp.gradient(warped)):
+                mgrad[..., i] = grad
+
+            #Convert the moving image's gradient field from voxel to physical space
+            if self.static_spacing is not None:
+                mgrad /= self.static_spacing
+            if self.static_direction is not None:
+                dd = np.eye(4)
+                dd[:3,:3] = self.static_direction
+                vf.reorient_vector_field_3d(mgrad, dd)
+
+        grid_to_world = M.dot(self.static_grid2world)
+        if False:
+            mgrad, inside = vf.gradient(self.moving.astype(np.float32),
+                                        self.moving_world2grid,
+                                        self.moving_spacing,
+                                        self.static.shape,
+                                        grid_to_world)
+        flag = 0
+        if update_gradient:
+            flag = 1
+        metric_grad, metric_val = cc_val_and_grad(self.static.astype(np.float32),
+                                                      self.transformed.astype(np.float32),
+                                                      mgrad, grid_to_world,
+                                                      factors, self.transform,
+                                                      params, self.radius, flag)
+        if update_gradient:
+            self.metric_grad = np.array(metric_grad, dtype=np.float64)
+        else:
+            self.metric_grad = None
+        self.metric_val = metric_val
+
+
+    def distance(self, params):
+        r""" Numeric value of the negative Mutual Information
+
+        We need to change the sign so we can use standard minimization
+        algorithms.
+
+        Parameters
+        ----------
+        params : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+
+        Returns
+        -------
+        neg_mi : float
+            the negative mutual information of the input images after
+            transforming the moving image by the currently set transform
+            with `params` parameters
+        """
+        self._update(params, False)
+        return -1 * self.metric_val
+
+    def gradient(self, params):
+        r""" Numeric value of the metric's gradient at the given parameters
+
+        Parameters
+        ----------
+        params : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+
+        Returns
+        -------
+        grad : array, shape (n,)
+            the gradient of the negative Mutual Information
+        """
+        self._update(params, True)
+        return -1 * self.metric_grad
+
+    def value_and_gradient(self, params):
+        r""" Numeric value of the metric and its gradient at given parameters
+
+        Parameters
+        ----------
+        params : array, shape (n,)
+            the parameter vector of the transform currently used by the metric
+            (the transform name is provided when self.setup is called), n is
+            the number of parameters of the transform
+
+        Returns
+        -------
+        neg_mi : float
+            the negative mutual information of the input images after
+            transforming the moving image by the currently set transform
+            with `params` parameters
+        neg_mi_grad : array, shape (n,)
+            the gradient of the negative Mutual Information
+        """
+        self._update(params, True)
+        print(-1 * self.metric_val, "-->", -1 * self.metric_grad)
+        return -1 * self.metric_val, -1 * self.metric_grad
 
 class AffineRegistration(object):
     def __init__(self,

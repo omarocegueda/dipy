@@ -15,6 +15,7 @@ from dipy.align import mattes
 from dipy.align.transforms import (Transform,
                                    regtransforms)
 from dipy.align.tests.test_mattes import setup_random_transform
+from dipy.align.crosscorr import window_sums
 
 # For each transform type, select a transform factor (indicating how large the
 # true transform between static and moving images will be) and a sampling
@@ -174,8 +175,8 @@ def test_affreg_all_transforms():
             nslices = 1
         else:
             nslices = 45
-        factor = factors[ttype][0]
         sampling_pc = factors[ttype][1]
+        factor = factors[ttype][0]
         transform = regtransforms[ttype]
 
         static, moving, static_grid2world, moving_grid2world, smask, mmask, T = \
@@ -194,6 +195,90 @@ def test_affreg_all_transforms():
         affine_map = affreg.optimize(static, moving, transform, x0,
                                      static_grid2world, moving_grid2world)
         transformed = affine_map.transform(moving)
+        # Sum of absolute differences
+        end_sad = np.abs(static - transformed).sum()
+        reduction = 1 - end_sad / start_sad
+        print("%s>>%f"%(ttype, reduction))
+        assert(reduction > 0.9)
+
+
+def test_ccparam_all_transforms():
+    # Test affine registration using all transforms with typical settings
+
+
+    #ttype = ('ROTATION', 3)
+
+
+    for ttype in factors.keys():
+        ttype = ('TRANSLATION', 3)
+        h = 1e-4
+        dim = ttype[1]
+        if dim == 2:
+            nslices = 1
+            warp_method = vf.warp_2d_affine
+        else:
+            nslices = 45
+            warp_method = vf.warp_3d_affine
+        factor = factors[ttype][0]
+        sampling_pc = factors[ttype][1]
+        transform = regtransforms[ttype]
+
+        static, moving, static_grid2world, moving_grid2world, smask, mmask, T = \
+                        setup_random_transform(transform, factor, nslices, 1.0)
+        # Sum of absolute differences
+        A = static.astype(np.float32)
+        TT = np.array([[[1,2],[3,4]],[[5,6],[7,8]]], dtype=np.float32)
+        out = np.empty_like(TT)
+        window_sums(TT, 1, out)
+        out = np.empty_like(A)
+        window_sums(A, 1, out)
+        start_sad = np.abs(static - moving).sum()
+
+        # Compute the gradient of the metric with the implementation under test
+        theta = transform.get_identity_parameters().copy()
+        M = transform.param_to_matrix(theta)
+        metric = imaffine.LocalCCMetric(4)
+        metric.setup(transform, static, moving)
+        v0, actual = metric.value_and_gradient(theta)
+
+        # Approximate the gradient numerically
+        n = transform.get_number_of_parameters()
+        expected = np.empty_like(actual)
+        for i in range(n):
+            dtheta_0 = theta.copy()
+            dtheta_1 = theta.copy()
+            dtheta_0[i] -= h
+            dtheta_1[i] += h
+            v0 = metric.distance(dtheta_0)
+            v1 = metric.distance(dtheta_1)
+            expected[..., i] = (v1 - v0) / (2*h)
+
+        grid_to_space = np.eye(dim + 1)
+        spacing = np.ones(dim, dtype=np.float64)
+        shape = np.array(static.shape, dtype=np.int32)
+        mgrad, inside = vf.gradient(moving.astype(np.float32), moving_g2w,
+                                    spacing, shape, grid_to_space)
+        metric.update_gradient_dense(theta, transform,
+                                     static.astype(np.float64),
+                                     moving.astype(np.float64),
+                                     grid_to_space, mgrad, smask, mmask)
+
+
+
+
+
+        affreg = imaffine.AffineRegistration(metric,
+                                             [10000, 1000, 100],
+                                             [3, 1, 0],
+                                             [4, 2, 1],
+                                             'L-BFGS-B',
+                                             None,
+                                             options=None)
+        x0 = transform.get_identity_parameters()
+        sol = affreg.optimize(static, moving, transform, x0, static_grid2world,
+                              moving_grid2world)
+        transformed = transform_image(static, static_grid2world, moving,
+                          moving_grid2world, sol)
         # Sum of absolute differences
         end_sad = np.abs(static - transformed).sum()
         reduction = 1 - end_sad / start_sad
