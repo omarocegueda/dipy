@@ -674,27 +674,20 @@ class LocalCCMetric(object):
                                            self.radius)
         factors = np.array(factors)
         # Compute the gradient of the warped img. (it is now sampled at static's grid)
-        if True:
-            warped = np.array(self.transformed)
-            mgrad = np.empty(warped.shape+(self.dim,), dtype=np.float32)
-            for i, grad in enumerate(sp.gradient(warped)):
-                mgrad[..., i] = grad
+        warped = np.array(self.transformed)
+        mgrad = np.empty(warped.shape+(self.dim,), dtype=np.float32)
+        for i, grad in enumerate(sp.gradient(warped)):
+            mgrad[..., i] = grad
 
-            #Convert the moving image's gradient field from voxel to physical space
-            if self.static_spacing is not None:
-                mgrad /= self.static_spacing
-            if self.static_direction is not None:
-                dd = np.eye(4)
-                dd[:3,:3] = self.static_direction
-                vf.reorient_vector_field_3d(mgrad, dd)
+        #Convert the moving image's gradient field from voxel to physical space
+        if self.static_spacing is not None:
+            mgrad /= self.static_spacing
+        if self.static_direction is not None:
+            dd = np.eye(4)
+            dd[:3,:3] = self.static_direction
+            vf.reorient_vector_field_3d(mgrad, dd)
 
         grid_to_world = M.dot(self.static_grid2world)
-        if False:
-            mgrad, inside = vf.gradient(self.moving.astype(np.float32),
-                                        self.moving_world2grid,
-                                        self.moving_spacing,
-                                        self.static.shape,
-                                        grid_to_world)
         flag = 0
         if update_gradient:
             flag = 1
@@ -771,7 +764,7 @@ class LocalCCMetric(object):
             the gradient of the negative Mutual Information
         """
         self._update(params, True)
-        print(-1 * self.metric_val, "-->", -1 * self.metric_grad)
+        #print(-1 * self.metric_val, "-->", -1 * self.metric_grad)
         return -1 * self.metric_val, -1 * self.metric_grad
 
 class AffineRegistration(object):
