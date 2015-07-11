@@ -667,12 +667,12 @@ class LocalCCMetric(object):
         self.transformed = np.array(self.affine_map.transform(self.moving))
 
         # Precompute CC factors
-        factors = precompute_cc_factors_3d(self.static.astype(np.float32), self.transformed.astype(np.float32),
+        factors = precompute_cc_factors_3d(self.static, self.transformed,
                                            self.radius)
         factors = np.array(factors)
         # Compute the gradient of the warped img. (it is now sampled at static's grid)
         warped = np.array(self.transformed)
-        mgrad = np.empty(warped.shape+(self.dim,), dtype=np.float32)
+        mgrad = np.empty(warped.shape+(self.dim,), dtype=np.float64)
         for i, grad in enumerate(sp.gradient(warped)):
             mgrad[..., i] = grad
 
@@ -688,11 +688,11 @@ class LocalCCMetric(object):
         flag = 0
         if update_gradient:
             flag = 1
-        metric_grad, metric_val = cc_val_and_grad(self.static.astype(np.float32),
-                                                      self.transformed.astype(np.float32),
-                                                      mgrad, grid_to_world,
-                                                      factors, self.transform,
-                                                      params, self.radius, flag)
+        metric_grad, metric_val = cc_val_and_grad(self.static,
+                                                  self.transformed,
+                                                  mgrad, grid_to_world,
+                                                  factors, self.transform,
+                                                  params, self.radius, flag)
         if update_gradient:
             self.metric_grad = np.array(metric_grad, dtype=np.float64)
         else:
