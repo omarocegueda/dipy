@@ -741,7 +741,7 @@ class LocalCCMetric(object):
         self._update(params, True)
         return -1 * self.metric_grad
 
-    def value_and_gradient(self, params):
+    def distance_and_gradient(self, params):
         r""" Numeric value of the metric and its gradient at given parameters
 
         Parameters
