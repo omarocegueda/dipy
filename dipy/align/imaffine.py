@@ -632,12 +632,9 @@ class LocalCCMetric(object):
         else:
             self.interp_method = vf.interpolate_scalar_3d
 
+        self.affine_map = AffineMap(P, static.shape, static_grid2world,
+                                    moving.shape, moving_grid2world)
 
-        self.transformed = transform_image(self.static,
-                                           self.static_grid2world,
-                                           self.moving,
-                                           self.moving_grid2world, P)
-        self.transformed = self.transformed.astype(np.float64)
 
     def _update(self, params, update_gradient=True):
         r""" Updates marginal and joint distributions and the joint gradient
@@ -666,9 +663,9 @@ class LocalCCMetric(object):
             M = M.dot(self.starting_affine)
 
         # Warp the moving image (dense case)
-        self.transformed = transform_image(self.static, self.static_grid2world,
-                                           self.moving, self.moving_grid2world, M)
-        self.transformed = self.transformed.astype(np.float64)
+        self.affine_map.set_affine(M)
+        self.transformed = np.array(self.affine_map.transform(self.moving))
+
         # Precompute CC factors
         factors = precompute_cc_factors_3d(self.static.astype(np.float32), self.transformed.astype(np.float32),
                                            self.radius)
