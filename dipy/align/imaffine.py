@@ -256,6 +256,8 @@ class AffineMap(object):
             comp = image_world2grid.dot(self.affine.dot(sampling_grid2world))
 
         # Transform the input image
+        if interp == 'linear':
+            image = image.astype(np.float64)
         transformed = _transform_method[(dim, interp)](image, shape, comp)
         return transformed
 
@@ -547,13 +549,16 @@ class MIMetric(ParzenMutualInformation):
             else:
                 # Compute the gradient of moving at the sampling points
                 # which are already given in physical space coordinates
+                # but have not been moved according to params
+                moved_samples = M.dot(self.samples.T).T
+                moved_samples = moved_samples[..., :self.dim]
                 mgrad, inside = vf.sparse_gradient(self.moving,
-                                                   sp_to_moving,
+                                                   self.moving_world2grid,
                                                    self.moving_spacing,
-                                                   self.samples)
+                                                   moved_samples)
                 # Sparse case: we need to provide the actual coordinates of
                 # all sampling points
-                sampling_info = self.samples[..., :self.dim]
+                sampling_info = moved_samples
             self.update_gradient(params, self.transform, static_values,
                                  moving_values, sampling_info, mgrad)
 
