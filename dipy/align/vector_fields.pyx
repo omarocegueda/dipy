@@ -3495,7 +3495,7 @@ cdef _warp_with_composition_trilinear(floating[:,:,:,:] phi1, floating[:,:,:,:] 
                         y = i
                         z = j
                     if phi2 is not None:
-                        inside = interpolate_vector_trilinear(phi2, x, y, z, P)
+                        inside = _interpolate_vector_3d[floating](phi2, x, y, z, P)
                         if inside == 0:
                             out[k, i, j] = 0
                             continue
@@ -3521,7 +3521,7 @@ cdef _warp_with_composition_trilinear(floating[:,:,:,:] phi1, floating[:,:,:,:] 
                         y = P[1]
                         z = P[2]
                     if phi1 is not None:
-                        inside = interpolate_vector_trilinear(phi1, x, y, z, Q)
+                        inside = _interpolate_vector_3d[floating](phi1, x, y, z, Q)
                         if inside == 0:
                             out[k, i, j] = 0
                             continue
@@ -3546,7 +3546,7 @@ cdef _warp_with_composition_trilinear(floating[:,:,:,:] phi1, floating[:,:,:,:] 
                         x = Q[0]
                         y = Q[1]
                         z = Q[2]
-                    inside = interpolate_scalar_trilinear(volume, x, y, z, &out[k,i,j])
+                    inside = _interpolate_scalar_3d[floating](volume, x, y, z, &out[k,i,j])
 
 cdef _warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
                                double[:,:] A, double[:,:] B, double[:,:] C,
@@ -3587,7 +3587,7 @@ cdef _warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
                         y = i
                         z = j
                     if phi2 is not None:
-                        inside = interpolate_vector_trilinear(phi2, x, y, z, P)
+                        inside = _interpolate_vector_3d[floating](phi2, x, y, z, P)
                         if inside == 0:
                             out[k, i, j] = 0
                             continue
@@ -3613,7 +3613,7 @@ cdef _warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
                         y = P[1]
                         z = P[2]
                     if phi1 is not None:
-                        inside = interpolate_vector_trilinear(phi1, x, y, z, Q)
+                        inside = _interpolate_vector_3d[floating](phi1, x, y, z, Q)
                         if inside == 0:
                             out[k, i, j] = 0
                             continue
@@ -3638,7 +3638,7 @@ cdef _warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
                         x = Q[0]
                         y = Q[1]
                         z = Q[2]
-                    inside = interpolate_scalar_nn_3d(volume, x, y, z, &out[k,i,j])
+                    inside = _interpolate_scalar_nn_3d[number](volume, x, y, z, &out[k,i,j])
 
 
 def warp_with_composition_trilinear(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
@@ -3703,5 +3703,183 @@ def warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
     cdef:
         number[:,:,:] out=np.zeros(shape=(ns,nr,nc), dtype=ftype)
 
-    _warp_with_composition_nn(phi1, phi2, A, B, C, D, E, volume, out)
+    _warp_with_composition_nn[floating,number](phi1, phi2, A, B, C, D, E, volume, out)
     return out
+
+
+def compute_jacobian_3d(floating[:, :, :, :] d):
+    r"""
+    Note: in general we should be able to sample the Jacobian at an arbitrary
+    grid by interpolating the displacement field. We need to consider both
+    grid-to-space transforms
+    """
+    ftype=np.asarray(d).dtype
+    cdef:
+        int ns = d.shape[0]
+        int nr = d.shape[1]
+        int nc = d.shape[2]
+        int k,i,j
+        double dxx, dxy, dxz, dyx, dyy, dyz, dzx, dzy, dzz
+        double hx, hy, hz
+        double[:, :, :] J = np.zeros(shape=(ns, nr, nc), dtype=np.float64)
+    with nogil:
+        for k in range(ns):
+            for i in range(nr):
+                for j in range(nc):
+                    # Derivatives w.r.t. x
+                    hx = 1.0
+                    if k < ns-1:
+                        hx = 0.5
+                        dxx = d[k + 1, i, j, 0]
+                        dyx = d[k + 1, i, j, 1]
+                        dzx = d[k + 1, i, j, 2]
+                    else:
+                        dxx = d[k, i, j, 0]
+                        dyx = d[k, i, j, 1]
+                        dzx = d[k, i, j, 2]
+
+                    if k > 0:
+                        hx = 0.5
+                        dxx = hx * (dxx - d[k - 1, i, j, 0])
+                        dyx = hx * (dyx - d[k - 1, i, j, 1])
+                        dzx = hx * (dzx - d[k - 1, i, j, 2])
+                    else:
+                        dxx = hx * (dxx - d[k, i, j, 0])
+                        dyx = hx * (dyx - d[k, i, j, 1])
+                        dzx = hx * (dzx - d[k, i, j, 2])
+
+                    # Derivatives w.r.t. y
+                    hy = 1.0
+                    if i < nr-1:
+                        hy = 0.5
+                        dxy = d[k, i + 1, j, 0]
+                        dyy = d[k, i + 1, j, 1]
+                        dzy = d[k, i + 1, j, 2]
+                    else:
+                        dxy = d[k, i, j, 0]
+                        dyy = d[k, i, j, 1]
+                        dzy = d[k, i, j, 2]
+
+                    if i > 0:
+                        hy = 0.5
+                        dxy = hy * (dxy - d[k, i - 1, j, 0])
+                        dyy = hy * (dyy - d[k, i - 1, j, 1])
+                        dzy = hy * (dzy - d[k, i - 1, j, 2])
+                    else:
+                        dxy = hy * (dxy - d[k, i, j, 0])
+                        dyy = hy * (dyy - d[k, i, j, 1])
+                        dzy = hy * (dzy - d[k, i, j, 2])
+
+                    # Derivatives w.r.t. z
+                    hz = 1.0
+                    if j < nc-1:
+                        hz = 0.5
+                        dxz = d[k, i, j + 1, 0]
+                        dyz = d[k, i, j + 1, 1]
+                        dzz = d[k, i, j + 1, 2]
+                    else:
+                        dxz = d[k, i, j, 0]
+                        dyz = d[k, i, j, 1]
+                        dzz = d[k, i, j, 2]
+
+                    if j > 0:
+                        hz = 0.5
+                        dxz = hz * (dxy - d[k, i, j - 1, 0])
+                        dyz = hz * (dyy - d[k, i, j - 1, 1])
+                        dzz = hz * (dzy - d[k, i, j - 1, 2])
+                    else:
+                        dxz = hz * (dxy - d[k, i, j, 0])
+                        dyz = hz * (dyy - d[k, i, j, 1])
+                        dzz = hz * (dzy - d[k, i, j, 2])
+
+                    # symmetrize the Jacobian matrix?
+                    J[k,i,j] = (1 + dxx)*((1+dyy)*(1+dzz) - dzy*dyz)\
+                               - dxy * ((dyx * (1+dzz)) - (dzx*dyz))\
+                               + dxz * (dyx*dzy - dzx*(1+dyy))
+    return J
+
+
+def compute_jacobian_2d(floating[:, :, :] d):
+    ftype=np.asarray(d).dtype
+    cdef:
+        int nr = d.shape[0]
+        int nc = d.shape[1]
+        int i,j
+        double dxx, dxy, dyx, dyy
+        double hx, hy
+        double[:, :] J = np.zeros(shape=(nr, nc), dtype=np.float64)
+    with nogil:
+        for i in range(nr):
+            for j in range(nc):
+                # Derivatives w.r.t. x
+                hx = 1.0
+                if i < nr - 1:
+                    hx = 0.5
+                    dxx = d[i + 1, j, 0]
+                    dyx = d[i + 1, j, 1]
+                else:
+                    dxx = d[i, j, 0]
+                    dyx = d[i, j, 1]
+
+                if i > 0:
+                    hx = 0.5
+                    dxx = hx * (dxx - d[i - 1, j, 0])
+                    dyx = hx * (dyx - d[i - 1, j, 1])
+                else:
+                    dxx = hx * (dxx - d[i, j, 0])
+                    dyx = hx * (dyx - d[i, j, 1])
+
+                # Derivatives w.r.t. y
+                hy = 1.0
+                if j < nc - 1:
+                    hy = 0.5
+                    dxy = d[i, j + 1, 0]
+                    dyy = d[i, j + 1, 1]
+                else:
+                    dxy = d[i, j, 0]
+                    dyy = d[i, j, 1]
+
+                if j > 0:
+                    hy = 0.5
+                    dxy = hy * (dxy - d[i, j - 1, 0])
+                    dyy = hy * (dyy - d[i, j - 1, 1])
+                else:
+                    dxy = hy * (dxy - d[i, j, 0])
+                    dyy = hy * (dyy - d[i, j, 1])
+
+                # symmetrize the Jacobian matrix?
+                J[i,j] = (1 + dxx) * (1 +  dyy) - dyx*dxy
+    return J
+
+
+def restrict_motion_3d(floating[:, :, :, :] d, double[:] dir):
+    cdef:
+        int ns = d.shape[0]
+        int nr = d.shape[1]
+        int nc = d.shape[2]
+        int k,i,j
+        double dp
+    with nogil:
+        for k in range(ns):
+            for i in range(nr):
+                for j in range(nc):
+                    dp = d[k,i,j,0] * dir[0] +\
+                         d[k,i,j,1] * dir[1] +\
+                         d[k,i,j,2] * dir[2]
+                    d[k,i,j,0] = dir[0] * dp
+                    d[k,i,j,1] = dir[1] * dp
+                    d[k,i,j,2] = dir[2] * dp
+
+
+def restrict_motion_2d(floating[:, :, :] d, double[:] dir):
+    cdef:
+        int nr = d.shape[0]
+        int nc = d.shape[1]
+        int i,j
+        double dp
+    with nogil:
+        for i in range(nr):
+            for j in range(nc):
+                dp = d[i,j,0] * dir[0] + d[i,j,1] * dir[1]
+                d[i,j,0] = dir[0] * dp
+                d[i,j,1] = dir[1] * dp
