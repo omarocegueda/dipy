@@ -12,6 +12,13 @@ from . import floating
 from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
+from inverse.dfinverse import invert_endomorphism_2d_simple
+#from inverse.dfinverse import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
+
+
+
+#from inverse.dfinverse import invert_endomorphism_2d_singular as invert_endomorphism_2d_simple
+#from dipy.align.vector_fields import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
 
 RegistrationStages = Bunch(INIT_START=0,
                            INIT_END=1,
@@ -354,7 +361,7 @@ class DiffeomorphicMap(object):
             elif image.dtype is np.dtype('int64'):
                 image = image.astype(np.int32)
         else:
-            image = np.asarray(image, dtype=floating)
+            image = np.asarray(image, dtype=np.array(self.forward).dtype)
 
         warp_f = self._get_warping_function(interpolation)
 
@@ -465,7 +472,7 @@ class DiffeomorphicMap(object):
             elif image.dtype is np.dtype('int64'):
                 image = image.astype(np.int32)
         else:
-            image = np.asarray(image, dtype=floating)
+            image = np.asarray(image, dtype=np.array(self.backward).dtype)
 
         warp_f = self._get_warping_function(interpolation)
 
@@ -1001,7 +1008,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         according to the dimension of the input images e.g. 2D or 3D.
         """
         if self.dim == 2:
-            self.invert_vector_field = vfu.invert_vector_field_fixed_point_2d
+            self.invert_vector_field = invert_endomorphism_2d_simple
             self.compose = vfu.compose_vector_fields_2d
         else:
             self.invert_vector_field = vfu.invert_vector_field_fixed_point_3d
@@ -1276,36 +1283,41 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.energy_list.append(fw_energy + bw_energy)
 
         # Invert the forward model's forward field
+        init_field = None
+        #init_field = self.static_to_ref.backward
         self.static_to_ref.backward = np.array(
             self.invert_vector_field(
                 self.static_to_ref.forward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, self.static_to_ref.backward))
+                self.inv_iter, self.inv_tol, init_field))
 
         # Invert the backward model's forward field
+        #init_field = self.moving_to_ref.backward
         self.moving_to_ref.backward = np.array(
             self.invert_vector_field(
                 self.moving_to_ref.forward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, self.moving_to_ref.backward))
+                self.inv_iter, self.inv_tol, init_field))
 
         # Invert the forward model's backward field
+        #init_field = self.static_to_ref.forward
         self.static_to_ref.forward = np.array(
             self.invert_vector_field(
                 self.static_to_ref.backward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, self.static_to_ref.forward))
+                self.inv_iter, self.inv_tol, init_field))
 
         # Invert the backward model's backward field
+        #init_field = self.moving_to_ref.forward
         self.moving_to_ref.forward = np.array(
             self.invert_vector_field(
                 self.moving_to_ref.backward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, self.moving_to_ref.forward))
+                self.inv_iter, self.inv_tol, init_field))
 
         # Free resources no longer needed to compute the forward and backward
         # steps
