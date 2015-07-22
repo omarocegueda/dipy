@@ -198,7 +198,7 @@ class ECCMetric(SimilarityMetric):
         """
         #This step uses the gradient of the static image
         displacement, self.energy = self.compute_forward_step(
-            self.gradient_static, self.gradient_moving, self.movingq_factors, self.radius)
+            self.gradient_static, self.movingq_factors, self.radius)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
@@ -212,7 +212,7 @@ class ECCMetric(SimilarityMetric):
         """
         #This step uses the gradient of the moving image
         displacement, energy=self.compute_backward_step(
-            self.gradient_static, self.gradient_moving, self.staticq_factors, self.radius)
+            self.gradient_moving, self.staticq_factors, self.radius)
         displacement=np.array(displacement)
         for i in range(self.dim):
             displacement[..., i] = ndimage.filters.gaussian_filter(
