@@ -198,7 +198,8 @@ cdef inline int _interpolate_scalar_2d(floating[:, :] image, double dii,
         cnp.npy_intp ii, jj
         int inside
         double alpha, beta, calpha, cbeta
-    if((dii <= -1) or (djj <= -1) or (dii >= nr) or (djj >= nc)):
+    if((dii!=dii) or (djj!=djj) or
+       (dii <= -1) or (djj <= -1) or (dii >= nr) or (djj >= nc)):
         out[0] = 0
         return 0
     # ---top-left
@@ -301,7 +302,8 @@ cdef inline int _interpolate_scalar_nn_2d(number[:, :] image, double dii,
         cnp.npy_intp nc = image.shape[1]
         cnp.npy_intp ii, jj
         double alpha, beta, calpha, cbeta
-    if((dii < 0) or (djj < 0) or (dii > nr - 1) or (djj > nc - 1)):
+    if((dii!=dii) or (djj!=djj) or
+       (dii < 0) or (djj < 0) or (dii > nr - 1) or (djj > nc - 1)):
         out[0] = 0
         return 0
     # find the top left index and the interpolation coefficients
@@ -398,7 +400,8 @@ cdef inline int _interpolate_scalar_nn_3d(number[:, :, :] volume, double dkk,
         cnp.npy_intp nc = volume.shape[2]
         cnp.npy_intp kk, ii, jj
         double alpha, beta, calpha, cbeta, gamma, cgamma
-    if not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1):
+    if ((dkk!=dkk) or (dii!=dii) or (djj!=djj) or
+        not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1)):
         out[0] = 0
         return 0
     # find the top left index and the interpolation coefficients
@@ -501,7 +504,8 @@ cdef inline int _interpolate_scalar_3d(floating[:, :, :] volume,
         cnp.npy_intp kk, ii, jj
         int inside
         double alpha, beta, calpha, cbeta, gamma, cgamma
-    if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
+    if ((dkk!=dkk) or (dii!=dii) or (djj!=djj) or
+        not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc)):
         out[0] = 0
         return 0
     # find the top left index and the interpolation coefficients
@@ -634,7 +638,8 @@ cdef inline int _interpolate_vector_3d(floating[:, :, :, :] field, double dkk,
         cnp.npy_intp kk, ii, jj
         int inside
         double alpha, beta, gamma, calpha, cbeta, cgamma
-    if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
+    if ((dkk!=dkk) or (dii!=dii) or (djj!=djj) or
+        not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc)):
         out[0] = 0
         out[1] = 0
         out[2] = 0
