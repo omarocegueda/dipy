@@ -1,5 +1,5 @@
 import numpy as np
-floating  = np.float32
+floating  = np.float64
 
 class Bunch(object):
     def __init__(self, **kwds):
