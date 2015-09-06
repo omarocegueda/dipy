@@ -46,7 +46,7 @@ of the same dimensions as the static image, we can do this by "transforming"
 the moving image using an identity transform
 """
 identity = np.eye(4)
-affine_map = AffineMap(None,
+affine_map = AffineMap(identity,
                        static.shape, static_grid2world,
                        moving.shape, moving_grid2world)
 resampled = affine_map.transform(moving)

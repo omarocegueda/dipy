@@ -12,12 +12,12 @@ from . import floating
 from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
-#from dipy.align.vector_fields import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
+from dipy.align.vector_fields import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
 #from inverse.dfinverse import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
 #from inverse.dfinverse import invert_vf_tsweep_ffold_2d as invert_endomorphism_2d_simple
 #from inverse.dfinverse import invert_vf_bfs_nonconvex as invert_endomorphism_2d_simple
-from inverse.dfinverse import invert_vf_solve_all as invert_endomorphism_2d_simple
-
+#from inverse.dfinverse import invert_vf_solve_all as invert_endomorphism_2d_simple
+total_cnt = 0
 
 
 RegistrationStages = Bunch(INIT_START=0,
@@ -664,7 +664,9 @@ class DiffeomorphicMap(object):
         else:
             compose_f = vfu.compose_vector_fields_3d
 
-        residual, stats = compose_f(self.backward, self.forward,
+        #residual, stats = compose_f(self.backward, self.forward,
+        #                            None, Dinv, 1.0, None)
+        residual, stats = compose_f(self.forward, self.backward,
                                     None, Dinv, 1.0, None)
 
         return np.asarray(residual), np.asarray(stats)
@@ -1283,48 +1285,71 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.energy_list.append(fw_energy + bw_energy)
 
         # Invert the forward model's forward field
-        init_field = None
-        #init_field = self.static_to_ref.backward
-        self.static_to_ref.backward = np.array(
-            self.invert_vector_field(
+        #init_field = None
+        init_field = self.static_to_ref.backward
+        self.static_to_ref.backward = self.invert_vector_field(
                 self.static_to_ref.forward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, init_field))
+                self.inv_iter, self.inv_tol, self.static_to_ref.backward)
+        debugging = False
+        if debugging:
+            r, s = vfu.compose_vector_fields_2d(self.static_to_ref.backward, self.static_to_ref.forward,
+                                                None, None, 1, None)
+            s = np.array(s)
+            print(">>> Static to ref:",s)
+        #np.save('s2r_fwd.npy', np.array(self.static_to_ref.forward))
+        #np.save('s2r_bwd.npy', np.array(self.static_to_ref.backward))
 
         # Invert the backward model's forward field
         #init_field = self.moving_to_ref.backward
-        self.moving_to_ref.backward = np.array(
-            self.invert_vector_field(
+        self.moving_to_ref.backward = self.invert_vector_field(
                 self.moving_to_ref.forward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, init_field))
+                self.inv_iter, self.inv_tol, self.moving_to_ref.backward)
+        if debugging:
+            r, s = vfu.compose_vector_fields_2d(self.moving_to_ref.backward, self.moving_to_ref.forward,
+                                                None, None, 1, None)
+            s = np.array(s)
+            print(">>> Moving to ref:",s)
+        #np.save('m2r_fwd.npy', np.array(self.moving_to_ref.forward))
+        #np.save('m2r_bwd.npy', np.array(self.moving_to_ref.backward))
 
         # Invert the forward model's backward field
         #init_field = self.static_to_ref.forward
-        self.static_to_ref.forward = np.array(
-            self.invert_vector_field(
+        self.static_to_ref.forward = self.invert_vector_field(
                 self.static_to_ref.backward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, init_field))
+                self.inv_iter, self.inv_tol, self.static_to_ref.forward)
+        if debugging:
+            r, s = vfu.compose_vector_fields_2d(self.static_to_ref.forward, self.static_to_ref.backward,
+                                                None, None, 1, None)
+            s = np.array(s)
+            print(">>> Static to ref:",s)
+        #np.save('s2r_fwd.npy', np.array(self.static_to_ref.forward))
+        #np.save('s2r_bwd.npy', np.array(self.static_to_ref.backward))
 
         # Invert the backward model's backward field
         #init_field = self.moving_to_ref.forward
-        self.moving_to_ref.forward = np.array(
-            self.invert_vector_field(
+        self.moving_to_ref.forward = self.invert_vector_field(
                 self.moving_to_ref.backward,
                 current_disp_world2grid,
                 current_disp_spacing,
-                self.inv_iter, self.inv_tol, init_field))
-
+                self.inv_iter, self.inv_tol, self.moving_to_ref.forward)
+        if debugging:
+            r, s = vfu.compose_vector_fields_2d(self.moving_to_ref.forward, self.moving_to_ref.backward,
+                                                None, None, 1, None)
+            s = np.array(s)
+            print(">>> Moving to ref:",s)
+        #np.save('m2r_fwd.npy', np.array(self.moving_to_ref.forward))
+        #np.save('m2r_bwd.npy', np.array(self.moving_to_ref.backward))
         # Free resources no longer needed to compute the forward and backward
         # steps
         if self.callback is not None:
             self.callback(self, RegistrationStages.ITER_END)
         self.metric.free_iteration()
-
         return der
 
     def _approximate_derivative_direct(self, x, y):
@@ -1419,13 +1444,13 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         residual, stats = self.static_to_ref.compute_inversion_error()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Static-Reference Residual error: %0.6f (%0.6f)'
+            print('Static-Reference Residual error: %0.9e (%0.9e)'
                   % (stats[1], stats[2]))
 
         residual, stats = self.moving_to_ref.compute_inversion_error()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Moving-Reference Residual error :%0.6f (%0.6f)'
+            print('Moving-Reference Residual error :%0.9e (%0.9e)'
                   % (stats[1], stats[2]))
 
         if self.return_partial:
@@ -1438,7 +1463,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         # Report mean and std for the composed deformation field
         residual, stats = self.static_to_ref.compute_inversion_error()
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Final residual error: %0.6f (%0.6f)' % (stats[1], stats[2]))
+            print('Final residual error: %0.9e (%0.9e)' % (stats[1], stats[2]))
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
         return self.static_to_ref
