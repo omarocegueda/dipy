@@ -12,14 +12,15 @@ from . import floating
 from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
-#from dipy.align.vector_fields import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
-#from dipy.align.vector_fields import invert_vector_field_fixed_point_3d as invert_endomorphism_3d_simple
+from dipy.align.vector_fields import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
+from dipy.align.vector_fields import invert_vector_field_fixed_point_3d as invert_endomorphism_3d_simple
 
 #from inverse.dfinverse import invert_vector_field_fixed_point_2d as invert_endomorphism_2d_simple
 #from inverse.dfinverse import invert_vf_tsweep_ffold_2d as invert_endomorphism_2d_simple
 #from inverse.dfinverse import invert_vf_bfs_nonconvex as invert_endomorphism_2d_simple
-from inverse.dfinverse import invert_vf_solve_all as invert_endomorphism_2d_simple
-from inverse.dfinverse_3d import invert_vf_bfs_nonconvex_3d as invert_endomorphism_3d_simple
+
+#from inverse.dfinverse import invert_vf_solve_all as invert_endomorphism_2d_simple
+#from inverse.dfinverse_3d import invert_vf_bfs_nonconvex_3d as invert_endomorphism_3d_simple
 total_cnt = 0
 
 
