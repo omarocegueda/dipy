@@ -102,9 +102,10 @@ registration object to perform at most [n_0, n_1, ..., n_k] iterations at
 each level of the pyramid. The 0-th level corresponds to the finest resolution.  
 """
 
-level_iters = [10, 10, 5]
-sdr = SymmetricDiffeomorphicRegistration(metric, level_iters)
-
+level_iters = [10, 10, 10]
+sdr = SymmetricDiffeomorphicRegistration(metric, level_iters, inv_iter=20, inv_tol=1e-3,step_length=0.35)
+from dipy.align import VerbosityLevels
+sdr.verbosity = VerbosityLevels.DIAGNOSE
 """
 Execute the optimization, which returns a DiffeomorphicMap object,
 that can be used to register images back and forth between the static and moving
@@ -119,6 +120,42 @@ Now let's warp the moving image and see if it gets similar to the static image
 """
 
 warped_moving = mapping.transform(moving)
+
+
+
+
+
+
+import os
+import pickle
+from mayavi import mlab
+from dipy.align import VerbosityLevels
+from dipy.align.metrics import SSDMetric
+from dipy.align.imwarp import SymmetricDiffeomorphicRegistration
+from inverse.common import invert_vector_field_fixed_point_3d
+from dipy.align.vector_fields import compose_vector_fields_3d
+from experiments.registration.images2gif import writeGif
+from inverse.dfinverse_3d import warp_points_3d
+
+from test_dfinverse_3d import *
+v = np.array(mapping.forward)
+w = np.array(mapping.backward)
+mlab.figure(bgcolor=(1,1,1))
+for z0 in [20, 40, 60]:
+    hor, ver = get_z_slice(z0, 0, 81, 0, 106, npoints=75)
+    for line  in hor:
+        warped = np.array(warp_points_3d(line, w))
+        mlab.plot3d(warped[:,0], warped[:,1], warped[:,2], color=(0,0,0), tube_radius=0.01)
+    for line  in ver:
+        warped = np.array(warp_points_3d(line, w))
+        mlab.plot3d(warped[:,0], warped[:,1], warped[:,2], color=(0,0,0), tube_radius=0.01)
+
+
+
+
+
+
+
 
 """
 We plot the overlapped middle slices

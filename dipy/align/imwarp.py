@@ -12,6 +12,8 @@ from . import floating
 from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
+from inverse.inverse_3d import invert_vf_full_box_3d as selected_inversion_3d
+#from .vector_fields import invert_vector_field_fixed_point_3d as selected_inversion_3d
 
 RegistrationStages = Bunch(INIT_START=0,
                            INIT_END=1,
@@ -621,7 +623,7 @@ class DiffeomorphicMap(object):
         self.disp_grid2world = expanded_grid2world
         self.disp_world2grid = expanded_world2grid
 
-    def compute_inversion_error(self):
+    def compute_inversion_error(self, direction='forward'):
         r"""Inversion error of the displacement fields
 
         Estimates the inversion error of the displacement fields by computing
@@ -655,8 +657,12 @@ class DiffeomorphicMap(object):
         else:
             compose_f = vfu.compose_vector_fields_3d
 
-        residual, stats = compose_f(self.backward, self.forward,
-                                    None, Dinv, 1.0, None)
+        if direction=='forward':
+            residual, stats = compose_f(self.forward, self.backward,
+                                        None, Dinv, 1.0, None)
+        elif direction=='backward':
+            residual, stats = compose_f(self.backward, self.forward,
+                                        None, Dinv, 1.0, None)
 
         return np.asarray(residual), np.asarray(stats)
 
@@ -984,7 +990,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             self.invert_vector_field = vfu.invert_vector_field_fixed_point_2d
             self.compose = vfu.compose_vector_fields_2d
         else:
-            self.invert_vector_field = vfu.invert_vector_field_fixed_point_3d
+            self.invert_vector_field = selected_inversion_3d
             self.compose = vfu.compose_vector_fields_3d
 
     def _init_optimizer(self, static, moving,
@@ -1384,7 +1390,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             self.static_to_ref.inverse()).inverse()
 
         # Report mean and std for the composed deformation field
-        residual, stats = self.static_to_ref.compute_inversion_error()
+        residual, stats = self.static_to_ref.compute_inversion_error('backward')
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
             print('Final residual error: %0.6f (%0.6f)' % (stats[1], stats[2]))
         if self.callback is not None:

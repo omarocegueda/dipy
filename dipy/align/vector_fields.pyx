@@ -1553,7 +1553,7 @@ def simplify_warp_function_3d(floating[:, :, :, :] d,
                             k, i, j, 1, affine_idx_in)
                         dj = _apply_affine_3d_x2(
                             k, i, j, 1, affine_idx_in)
-                        inside = _interpolate_vector_3d[floating](d, dk, di, 
+                        inside = _interpolate_vector_3d[floating](d, dk, di,
                                                                   dj, tmp)
                         dkk = tmp[0]
                         dii = tmp[1]
@@ -3370,7 +3370,7 @@ def _sparse_gradient_2d(floating[:, :] img, double[:, :] img_world2grid,
                 dx[p] = sample_points[i, p]
 
 
-def gradient(img, img_world2grid, img_spacing, out_shape, 
+def gradient(img, img_world2grid, img_spacing, out_shape,
              out_grid2world):
     r""" Gradient of an image in physical space
 
@@ -3456,3 +3456,5 @@ def sparse_gradient(img, img_world2grid, img_spacing, sample_points):
     jd_grad(img, img_world2grid.astype(np.float64),
             img_spacing.astype(np.float64), sample_points, out, inside)
     return out, inside
+
+
