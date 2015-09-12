@@ -656,13 +656,13 @@ class DiffeomorphicMap(object):
             compose_f = vfu.compose_vector_fields_2d
         else:
             compose_f = vfu.compose_vector_fields_3d
-
+        residual = np.zeros_like(self.forward)
         if direction=='forward':
             residual, stats = compose_f(self.forward, self.backward,
-                                        None, Dinv, 1.0, None)
+                                        None, Dinv, 1.0, residual)
         elif direction=='backward':
             residual, stats = compose_f(self.backward, self.forward,
-                                        None, Dinv, 1.0, None)
+                                        None, Dinv, 1.0, residual)
 
         return np.asarray(residual), np.asarray(stats)
 
@@ -1376,13 +1376,13 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         residual, stats = self.static_to_ref.compute_inversion_error()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Static-Reference Residual error: %0.6f (%0.6f)'
+            print('Static-Reference Residual error: %e (%e)'
                   % (stats[1], stats[2]))
 
         residual, stats = self.moving_to_ref.compute_inversion_error()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Moving-Reference Residual error :%0.6f (%0.6f)'
+            print('Moving-Reference Residual error :%e (%e)'
                   % (stats[1], stats[2]))
 
         # Compose the two partial transformations
@@ -1392,7 +1392,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         # Report mean and std for the composed deformation field
         residual, stats = self.static_to_ref.compute_inversion_error('backward')
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Final residual error: %0.6f (%0.6f)' % (stats[1], stats[2]))
+            print('Final residual error: %e (%e)' % (stats[1], stats[2]))
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
 
