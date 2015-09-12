@@ -737,10 +737,11 @@ class DiffeomorphicMap(object):
             compose_f = vfu.compose_vector_fields_2d
         else:
             compose_f = vfu.compose_vector_fields_3d
-
-        forward, stats = compose_f(d1, d2, None, premult_disp, 1.0, None)
+        forward = np.zeros_like(d1)
+        backward = np.zeros_like(d2_inv)
+        forward, stats = compose_f(d1, d2, None, premult_disp, 1.0, forward)
         backward, stats, = compose_f(d2_inv, d1_inv, None, premult_disp, 1.0,
-                                     None)
+                                     backward)
 
         composition = self.shallow_copy()
         composition.forward = forward
