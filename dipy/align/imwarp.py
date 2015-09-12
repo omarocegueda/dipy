@@ -656,9 +656,10 @@ class DiffeomorphicMap(object):
             compose_f = vfu.compose_vector_fields_2d
         else:
             compose_f = vfu.compose_vector_fields_3d
+        residual = np.zeros_like(self.backward)
 
         residual, stats = compose_f(self.backward, self.forward,
-                                    None, Dinv, 1.0, None)
+                                    None, Dinv, 1.0, residual)
 
         return np.asarray(residual), np.asarray(stats)
 

@@ -3725,9 +3725,9 @@ def compute_jacobian_3d(floating[:, :, :, :] d):
         double hx, hy, hz
         double[:, :, :] J = np.zeros(shape=(ns, nr, nc), dtype=np.float64)
     with nogil:
-        for k in range(ns):
-            for i in range(nr):
-                for j in range(nc):
+        for k in range(ns-1):
+            for i in range(nr-1):
+                for j in range(nc-1):
                     # Derivatives w.r.t. x
                     hx = 1.0
                     if k < ns-1:
@@ -3811,44 +3811,22 @@ def compute_jacobian_2d(floating[:, :, :] d):
         double hx, hy
         double[:, :] J = np.zeros(shape=(nr, nc), dtype=np.float64)
     with nogil:
-        for i in range(nr):
-            for j in range(nc):
+        for i in range(nr-1):
+            for j in range(nc-1):
                 # Derivatives w.r.t. x
-                hx = 1.0
-                if i < nr - 1:
-                    hx = 0.5
-                    dxx = d[i + 1, j, 0]
-                    dyx = d[i + 1, j, 1]
-                else:
-                    dxx = d[i, j, 0]
-                    dyx = d[i, j, 1]
-
-                if i > 0:
-                    hx = 0.5
-                    dxx = hx * (dxx - d[i - 1, j, 0])
-                    dyx = hx * (dyx - d[i - 1, j, 1])
-                else:
-                    dxx = hx * (dxx - d[i, j, 0])
-                    dyx = hx * (dyx - d[i, j, 1])
-
+                dxx = d[i + 1, j, 0] - d[i + 1, j, 0]
+                dxx += d[i + 1, j + 1, 0] - d[i + 1, j + 1, 0]
+                dxx *= 0.5
+                dyx = d[i + 1, j, 1] - d[i + 1, j, 1]
+                dyx += d[i + 1, j + 1, 1] - d[i + 1, j + 1, 1]
+                dyx *= 0.5
                 # Derivatives w.r.t. y
-                hy = 1.0
-                if j < nc - 1:
-                    hy = 0.5
-                    dxy = d[i, j + 1, 0]
-                    dyy = d[i, j + 1, 1]
-                else:
-                    dxy = d[i, j, 0]
-                    dyy = d[i, j, 1]
-
-                if j > 0:
-                    hy = 0.5
-                    dxy = hy * (dxy - d[i, j - 1, 0])
-                    dyy = hy * (dyy - d[i, j - 1, 1])
-                else:
-                    dxy = hy * (dxy - d[i, j, 0])
-                    dyy = hy * (dyy - d[i, j, 1])
-
+                dxy = d[i, j + 1, 0] - d[i, j, 0]
+                dxy += d[i + 1, j + 1, 0] - d[i + 1, j, 0]
+                dxy *= 0.5
+                dyy = d[i, j + 1, 1] - d[i, j, 1]
+                dyy += d[i + 1, j + 1, 1] - d[i + 1, j, 1]
+                dyy *= 0.5
                 # symmetrize the Jacobian matrix?
                 J[i,j] = (1 + dxx) * (1 +  dyy) - dyx*dxy
     return J
