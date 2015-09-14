@@ -12,8 +12,8 @@ from . import floating
 from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
-from inverse.inverse_3d import invert_vf_full_box_3d as selected_inversion_3d
-#from .vector_fields import invert_vector_field_fixed_point_3d as selected_inversion_3d
+#from inverse.inverse_3d import invert_vf_full_box_3d as selected_inversion_3d
+from .vector_fields import invert_vector_field_fixed_point_3d as selected_inversion_3d
 
 RegistrationStages = Bunch(INIT_START=0,
                            INIT_END=1,
@@ -1377,14 +1377,14 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         residual, stats = self.static_to_ref.compute_inversion_error()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Static-Reference Residual error: %e (%e)'
-                  % (stats[1], stats[2]))
+            print('Static-Reference Residual error: %e, %e (%e)'
+                  % (stats[0], stats[1], stats[2]))
 
         residual, stats = self.moving_to_ref.compute_inversion_error()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Moving-Reference Residual error :%e (%e)'
-                  % (stats[1], stats[2]))
+            print('Moving-Reference Residual error: %e, %e (%e)'
+                  % (stats[0], stats[1], stats[2]))
 
         # Compose the two partial transformations
         self.static_to_ref = self.moving_to_ref.warp_endomorphism(
@@ -1393,7 +1393,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         # Report mean and std for the composed deformation field
         residual, stats = self.static_to_ref.compute_inversion_error('backward')
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Final residual error: %e (%e)' % (stats[1], stats[2]))
+            print('Final residual error: %e, %e (%e)' % (stats[0], stats[1], stats[2]))
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
 
