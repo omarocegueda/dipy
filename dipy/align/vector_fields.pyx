@@ -1174,9 +1174,10 @@ def invert_vector_field_fixed_point_2d(floating[:, :, :] d,
         cnp.npy_intp nr = d.shape[0]
         cnp.npy_intp nc = d.shape[1]
         int iter_count, current, flag
-        double difmag, mag, maxlen, step_factor
+        double mag, maxlen, step_factor
         double epsilon
         double error = 1 + tolerance
+        double difmag = 1 + tolerance
         double di, dj, dii, djj
         double sr = spacing[0], sc = spacing[1]
 
@@ -1196,8 +1197,7 @@ def invert_vector_field_fixed_point_2d(floating[:, :, :] d,
 
     with nogil:
         iter_count = 0
-        #while (iter_count < max_iter) and (1e-3 < error) and (difmag > tolerance):
-        while (iter_count < max_iter) and (difmag > tolerance):
+        while (iter_count < max_iter) and (tolerance < error):
             if iter_count == 0:
                 epsilon = 0.75
             else:
@@ -1281,9 +1281,10 @@ def invert_vector_field_fixed_point_3d(floating[:, :, :, :] d,
         cnp.npy_intp nc = d.shape[2]
         int iter_count, current
         double dkk, dii, djj, dk, di, dj
-        double difmag, mag, maxlen, step_factor
+        double mag, maxlen, step_factor
         double epsilon = 0.5
         double error = 1 + tol
+        double difmag = 1 + tol
         double ss = spacing[0], sr = spacing[1], sc = spacing[2]
 
     ftype = np.asarray(d).dtype
@@ -1303,7 +1304,8 @@ def invert_vector_field_fixed_point_3d(floating[:, :, :, :] d,
     with nogil:
         iter_count = 0
         difmag = 1
-        while (tol < difmag) and (iter_count < max_iter) and (1e-3 < error):
+        #while (tol < difmag) and (iter_count < max_iter) and (1e-3 < error):
+        while (tol < difmag) and (iter_count < max_iter):
             if iter_count == 0:
                 epsilon = 0.75
             else:
