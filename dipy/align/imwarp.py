@@ -1131,7 +1131,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         del self.moving_ss
         del self.static_ss
 
-    def _iterate_old(self):
+    def _iterate(self):
         r"""Performs one symmetric iteration
 
         Performs one iteration of the SyN algorithm:
@@ -1299,7 +1299,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         return der
 
 
-    def _iterate(self):
+    def _iterate_new(self):
         r"""Performs one symmetric iteration
 
         Performs one iteration of the SyN algorithm:
