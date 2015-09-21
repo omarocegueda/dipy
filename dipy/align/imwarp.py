@@ -1131,7 +1131,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         del self.moving_ss
         del self.static_ss
 
-    def _iterate(self):
+    def _iterate_old(self):
         r"""Performs one symmetric iteration
 
         Performs one iteration of the SyN algorithm:
@@ -1281,6 +1281,195 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                 current_disp_world2grid,
                 current_disp_spacing,
                 self.inv_iter, self.inv_tol, self.static_to_ref.forward))
+
+        # Invert the backward model's backward field
+        self.moving_to_ref.forward = np.array(
+            self.invert_vector_field(
+                self.moving_to_ref.backward,
+                current_disp_world2grid,
+                current_disp_spacing,
+                self.inv_iter, self.inv_tol, self.moving_to_ref.forward))
+
+        # Free resources no longer needed to compute the forward and backward
+        # steps
+        if self.callback is not None:
+            self.callback(self, RegistrationStages.ITER_END)
+        self.metric.free_iteration()
+
+        return der
+
+
+    def _iterate(self):
+        r"""Performs one symmetric iteration
+
+        Performs one iteration of the SyN algorithm:
+            1.Compute forward
+            2.Compute backward
+            3.Update forward
+            4.Update backward
+            5.Compute inverses
+            6.Invert the inverses
+
+        Returns
+        -------
+        der : float
+            the derivative of the energy profile, computed by fitting a
+            quadratic function to the energy values at the latest T iterations,
+            where T = self.energy_window. If the current iteration is less than
+            T then np.inf is returned instead.
+        """
+        # Acquire current resolution information from scale spaces
+        current_moving = self.moving_ss.get_image(self.current_level)
+        current_static = self.static_ss.get_image(self.current_level)
+
+        current_disp_shape = \
+            self.static_ss.get_domain_shape(self.current_level)
+        current_disp_grid2world = \
+            self.static_ss.get_affine(self.current_level)
+        current_disp_world2grid = \
+            self.static_ss.get_affine_inv(self.current_level)
+        current_disp_spacing = \
+            self.static_ss.get_spacing(self.current_level)
+
+        # Warp the input images (smoothed to the current scale) to the common
+        # (reference) space at the current resolution
+        wstatic = self.static_to_ref.transform_inverse(current_static,
+                                                       'linear',
+                                                       None,
+                                                       current_disp_shape,
+                                                       current_disp_grid2world)
+        wmoving = self.moving_to_ref.transform_inverse(current_moving,
+                                                       'linear',
+                                                       None,
+                                                       current_disp_shape,
+                                                       current_disp_grid2world)
+        # Pass both images to the metric. Now both images are sampled on the
+        # reference grid (equal to the static image's grid) and the direction
+        # doesn't change across scales
+        self.metric.set_moving_image(wmoving, current_disp_grid2world,
+                                     current_disp_spacing,
+                                     self.static_direction)
+        self.metric.use_moving_image_dynamics(
+            current_moving, self.moving_to_ref.inverse())
+
+        self.metric.set_static_image(wstatic, current_disp_grid2world,
+                                     current_disp_spacing,
+                                     self.static_direction)
+        self.metric.use_static_image_dynamics(
+            current_static, self.static_to_ref.inverse())
+
+        # Initialize the metric for a new iteration
+        self.metric.initialize_iteration()
+        if self.callback is not None:
+            self.callback(self, RegistrationStages.ITER_START)
+
+
+
+        # Compute the forward step (to be used to update the forward transform)
+        fw_step = np.array(self.metric.compute_forward())
+
+        # set zero displacements at the boundary
+        fw_step[0, ...] = 0
+        fw_step[:, 0, ...] = 0
+        fw_step[-1, ...] = 0
+        fw_step[:, -1, ...] = 0
+        if(self.dim == 3):
+            fw_step[:, :, 0, ...] = 0
+            fw_step[:, :, -1, ...] = 0
+
+        # Normalize the forward step
+        nrm = np.sqrt(np.sum((fw_step/current_disp_spacing)**2, -1)).max()
+        if nrm > 0:
+            fw_step /= nrm
+
+        # Add to current total field
+        self.static_to_ref.forward, md_forward = self.update(
+            self.static_to_ref.forward, fw_step,
+            current_disp_world2grid, self.step_length)
+        del fw_step
+
+        # Keep track of the forward energy
+        fw_energy = self.metric.get_energy()
+        # Invert the forward model's forward field
+        self.static_to_ref.backward = np.array(
+            self.invert_vector_field(
+                self.static_to_ref.forward,
+                current_disp_world2grid,
+                current_disp_spacing,
+                self.inv_iter, self.inv_tol, self.static_to_ref.backward))
+
+        # Invert the forward model's backward field
+        self.static_to_ref.forward = np.array(
+            self.invert_vector_field(
+                self.static_to_ref.backward,
+                current_disp_world2grid,
+                current_disp_spacing,
+                self.inv_iter, self.inv_tol, self.static_to_ref.forward))
+
+        # Update the warped static image
+        wstatic = self.static_to_ref.transform_inverse(current_static,
+                                                       'linear',
+                                                       None,
+                                                       current_disp_shape,
+                                                       current_disp_grid2world)
+        self.metric.set_static_image(wstatic, current_disp_grid2world,
+                                     current_disp_spacing,
+                                     self.static_direction)
+        self.metric.use_static_image_dynamics(
+            current_static, self.static_to_ref.inverse())
+
+        # Initialize the metric for a new iteration
+        self.metric.initialize_iteration()
+
+
+
+
+
+
+        # Compupte backward step (to be used to update the backward transform)
+        bw_step = np.array(self.metric.compute_backward())
+
+        # set zero displacements at the boundary
+        bw_step[0, ...] = 0
+        bw_step[:, 0, ...] = 0
+        bw_step[-1, ...] = 0
+        bw_step[:, -1, ...] = 0
+        if(self.dim == 3):
+            bw_step[:, :, 0, ...] = 0
+            bw_step[:, :, -1, ...] = 0
+
+        # Normalize the backward step
+        nrm = np.sqrt(np.sum((bw_step/current_disp_spacing) ** 2, -1)).max()
+        if nrm > 0:
+            bw_step /= nrm
+
+        # Add to current total field
+        self.moving_to_ref.forward, md_backward = self.update(
+            self.moving_to_ref.forward, bw_step,
+            current_disp_world2grid, self.step_length)
+        del bw_step
+
+        # Keep track of the energy
+        bw_energy = self.metric.get_energy()
+        der = np.inf
+        n_iter = len(self.energy_list)
+        if len(self.energy_list) >= self.energy_window:
+            der = self._get_energy_derivative()
+
+        if self.verbosity >= VerbosityLevels.DIAGNOSE:
+            ch = '-' if np.isnan(der) else der
+            print('%d:\t%0.6f\t%0.6f\t%0.6f\t%s' %
+                  (n_iter, fw_energy, bw_energy, fw_energy + bw_energy, ch))
+
+        self.energy_list.append(fw_energy + bw_energy)
+
+        # Invert the backward model's forward field
+        self.moving_to_ref.backward = np.array(
+            self.invert_vector_field(
+                self.moving_to_ref.forward,
+                current_disp_world2grid,
+                current_disp_spacing,
+                self.inv_iter, self.inv_tol, self.moving_to_ref.backward))
 
         # Invert the backward model's backward field
         self.moving_to_ref.forward = np.array(
