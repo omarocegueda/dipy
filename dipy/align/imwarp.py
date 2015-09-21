@@ -12,8 +12,9 @@ from . import floating
 from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
-#from inverse.inverse_3d import invert_vf_full_box_3d as selected_inversion_3d
-from .vector_fields import invert_vector_field_fixed_point_3d as selected_inversion_3d
+from inverse.inverse_3d import invert_vf_full_box_3d
+from inverse.inverse_2d import invert_vf_full_box_2d
+default_inv_type = 'fp'
 
 RegistrationStages = Bunch(INIT_START=0,
                            INIT_END=1,
@@ -871,7 +872,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                  opt_tol=1e-5,
                  inv_iter=20,
                  inv_tol=1e-3,
-                 callback=None):
+                 callback=None,
+                 inv_type=default_inv_type):
         r""" Symmetric Diffeomorphic Registration (SyN) Algorithm
 
         Performs the multi-resolution optimization algorithm for non-linear
@@ -929,6 +931,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.static_direction = None
         self.moving_direction = None
         self.mask0 = metric.mask0
+        self.inv_type = inv_type
 
     def update(self, current_displacement, new_displacement,
                disp_world2grid, time_scaling):
@@ -987,8 +990,15 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         inversion, Gaussian pyramid, and affine / dense deformation composition
         according to the dimension of the input images e.g. 2D or 3D.
         """
+        if self.inv_type=='fp':
+            selected_inversion_2d = vfu.invert_vector_field_fixed_point_2d
+            selected_inversion_3d = vfu.invert_vector_field_fixed_point_3d
+        else:
+            selected_inversion_2d = invert_vf_full_box_2d
+            selected_inversion_3d = invert_vf_full_box_3d
+
         if self.dim == 2:
-            self.invert_vector_field = vfu.invert_vector_field_fixed_point_2d
+            self.invert_vector_field = selected_inversion_2d
             self.compose = vfu.compose_vector_fields_2d
         else:
             self.invert_vector_field = selected_inversion_3d
@@ -1217,8 +1227,11 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         # set zero displacements at the boundary
         bw_step[0, ...] = 0
         bw_step[:, 0, ...] = 0
+        bw_step[-1, ...] = 0
+        bw_step[:, -1, ...] = 0
         if(self.dim == 3):
             bw_step[:, :, 0, ...] = 0
+            bw_step[:, :, -1, ...] = 0
 
         # Normalize the backward step
         nrm = np.sqrt(np.sum((bw_step/current_disp_spacing) ** 2, -1)).max()
@@ -1285,6 +1298,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
 
         return der
 
+
     def _approximate_derivative_direct(self, x, y):
         r"""Derivative of the degree-2 polynomial fit of the given x, y pairs
 
@@ -1332,7 +1346,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         der = self._approximate_derivative_direct(x, y)
         return der
 
-    def _optimize(self):
+    def _optimize(self, return_partial=False):
         r"""Starts the optimization
 
         The main multi-scale symmetric optimization algorithm
@@ -1373,32 +1387,48 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             if self.callback is not None:
                 self.callback(self, RegistrationStages.SCALE_END)
 
+        self.full_stats = {}
+        self.full_stats['energy'] = np.array(self.energy_list)
+
         # Reporting mean and std in stats[1] and stats[2]
         residual, stats = self.static_to_ref.compute_inversion_error()
+        self.full_stats['S2R_error'] = np.array(stats).copy()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
             print('Static-Reference Residual error: %e, %e (%e)'
                   % (stats[0], stats[1], stats[2]))
 
         residual, stats = self.moving_to_ref.compute_inversion_error()
+        self.full_stats['M2R_error'] = np.array(stats).copy()
 
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
             print('Moving-Reference Residual error: %e, %e (%e)'
                   % (stats[0], stats[1], stats[2]))
+
+        if return_partial:
+            return self.static_to_ref, self.moving_to_ref
 
         # Compose the two partial transformations
         self.static_to_ref = self.moving_to_ref.warp_endomorphism(
             self.static_to_ref.inverse()).inverse()
 
         # Report mean and std for the composed deformation field
-        residual, stats = self.static_to_ref.compute_inversion_error('backward')
+        residual, stats = self.static_to_ref.compute_inversion_error('forward')
+        self.full_stats['composition_error_fwd'] = np.array(stats).copy()
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
-            print('Final residual error: %e, %e (%e)' % (stats[0], stats[1], stats[2]))
+            print('Final residual error(fwd): %e, %e (%e)' % (stats[0], stats[1], stats[2]))
+        residual, stats = self.static_to_ref.compute_inversion_error('backward')
+        self.full_stats['composition_error_bwd'] = np.array(stats).copy()
+        if self.verbosity >= VerbosityLevels.DIAGNOSE:
+            print('Final residual error(bwd): %e, %e (%e)' % (stats[0], stats[1], stats[2]))
+
+
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
+        return self.static_to_ref
 
     def optimize(self, static, moving, static_grid2world=None,
-                 moving_grid2world=None, prealign=None):
+                 moving_grid2world=None, prealign=None, return_partial=False):
         r"""
         Starts the optimization
 
@@ -1439,6 +1469,6 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
 
         self._init_optimizer(static.astype(floating), moving.astype(floating),
                              static_grid2world, moving_grid2world, prealign)
-        self._optimize()
+        retval = self._optimize(return_partial)
         self._end_optimizer()
-        return self.static_to_ref
+        return retval

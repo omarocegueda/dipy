@@ -864,3 +864,223 @@ def precompute_cc_factors_3d(floating[:, :, :] static, floating[:, :, :] moving,
                         factors[ss, rr, cc, 3] = Isq
                         factors[ss, rr, cc, 4] = Jsq
     return factors
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def compute_cc_forward_step_3d_nofactors(floating[:, :, :] static, floating[:, :, :] moving,
+                                         floating[:, :, :, :] grad_static, cnp.npy_intp radius):
+    cdef:
+        cnp.npy_intp ns = static.shape[0]
+        cnp.npy_intp nr = static.shape[1]
+        cnp.npy_intp nc = static.shape[2]
+        cnp.npy_intp side = 2 * radius + 1
+        cnp.npy_intp firstc, lastc, firstr, lastr, firsts, lasts
+        cnp.npy_intp s, r, c, idx, sides, sider, sidec
+        double cnt, energy = 0
+        cnp.npy_intp ssss, sss, ss, rr, cc, prev_ss, prev_rr, prev_cc
+        double Imean, Jmean, Ii, Ji, sfm, sff, smm, localCorrelation, aux
+        double[:, :, :, :] temp = np.zeros((2, nr, nc, 5), dtype=np.float64)
+        floating[:, :, :, :] out = np.zeros((ns, nr, nc, 3),
+                                            dtype=np.asarray(grad_static).dtype)
+    with nogil:
+        sss = 1
+        for s in range(ns+radius):
+            ss = _mod(s - radius, ns)
+            sss = 1 - sss
+            firsts = _int_max(0, ss - radius)
+            lasts = _int_min(ns - 1, ss + radius)
+            sides = (lasts - firsts + 1)
+            for r in range(nr+radius):
+                rr = _mod(r - radius, nr)
+                firstr = _int_max(0, rr - radius)
+                lastr = _int_min(nr - 1, rr + radius)
+                sider = (lastr - firstr + 1)
+                for c in range(nc+radius):
+                    cc = _mod(c - radius, nc)
+                    # New corner
+                    _increment_factors(temp, moving, static, sss, rr, cc, s, r, c, 0)
+                    # Add signed sub-volumes
+                    if s>0:
+                        prev_ss = 1 - sss
+                        for idx in range(5):
+                            temp[sss, rr, cc, idx] += temp[prev_ss, rr, cc, idx]
+                        if r>0:
+                            prev_rr = _mod(rr-1, nr)
+                            for idx in range(5):
+                                temp[sss, rr, cc, idx] -= temp[prev_ss, prev_rr, cc, idx]
+                            if c>0:
+                                prev_cc = _mod(cc-1, nc)
+                                for idx in range(5):
+                                    temp[sss, rr, cc, idx] += temp[prev_ss, prev_rr, prev_cc, idx]
+                        if c>0:
+                            prev_cc = _mod(cc-1, nc)
+                            for idx in range(5):
+                                temp[sss, rr, cc, idx] -= temp[prev_ss, rr, prev_cc, idx]
+                    if(r>0):
+                        prev_rr = _mod(rr-1, nr)
+                        for idx in range(5):
+                            temp[sss, rr, cc, idx] += temp[sss, prev_rr, cc, idx]
+                        if(c>0):
+                            prev_cc = _mod(cc-1, nc)
+                            for idx in range(5):
+                                temp[sss, rr, cc, idx] -= temp[sss, prev_rr, prev_cc, idx]
+                    if(c>0):
+                        prev_cc = _mod(cc-1, nc)
+                        for idx in range(5):
+                            temp[sss, rr, cc, idx] += temp[sss, rr, prev_cc, idx]
+                    # Add signed corners
+                    if s>=side:
+                        _increment_factors(temp, moving, static, sss, rr, cc, s-side, r, c, -1)
+                        if r>=side:
+                            _increment_factors(temp, moving, static, sss, rr, cc, s-side, r-side, c, 1)
+                            if c>=side:
+                                _increment_factors(temp, moving, static, sss, rr, cc, s-side, r-side, c-side, -1)
+                        if c>=side:
+                            _increment_factors(temp, moving, static, sss, rr, cc, s-side, r, c-side, 1)
+                    if r>=side:
+                        _increment_factors(temp, moving, static, sss, rr, cc, s, r-side, c, -1)
+                        if c>=side:
+                            _increment_factors(temp, moving, static, sss, rr, cc, s, r-side, c-side, 1)
+
+                    if c>=side:
+                        _increment_factors(temp, moving, static, sss, rr, cc, s, r, c-side, -1)
+                    # Compute final factors
+                    if ss>=radius and ss<ns-radius and rr>=radius and rr<nr-radius and cc>=radius and cc<nc-radius:
+                        firstc = _int_max(0, cc - radius)
+                        lastc = _int_min(nc - 1, cc + radius)
+                        sidec = (lastc - firstc + 1)
+                        cnt = sides*sider*sidec
+
+                        Imean = temp[sss, rr, cc, SI] / cnt
+                        Jmean = temp[sss, rr, cc, SJ] / cnt
+                        Ii = static[ss, rr, cc] - Imean
+                        Ji = moving[ss, rr, cc] - Jmean
+                        sfm = (temp[sss, rr, cc, SIJ] - Jmean * temp[sss, rr, cc, SI] -
+                            Imean * temp[sss, rr, cc, SJ] + cnt * Jmean * Imean)
+                        sff = (temp[sss, rr, cc, SI2] - Imean * temp[sss, rr, cc, SI] -
+                            Imean * temp[sss, rr, cc, SI] + cnt * Imean * Imean)
+                        smm = (temp[sss, rr, cc, SJ2] - Jmean * temp[sss, rr, cc, SJ] -
+                            Jmean * temp[sss, rr, cc, SJ] + cnt * Jmean * Jmean)
+                        if not (sff == 0.0 or smm == 0.0):
+                            localCorrelation = 0
+                            if(sff * smm > 1e-5):
+                                localCorrelation = sfm * sfm / (sff * smm)
+                            if(localCorrelation < 1):  # avoid bad values...
+                                energy -= localCorrelation
+                            aux = 2.0 * sfm / (sff * smm) * (Ji - sfm / sff * Ii)
+                            out[ss, rr, cc, 0] -= aux * grad_static[ss, rr, cc, 0]
+                            out[ss, rr, cc, 1] -= aux * grad_static[ss, rr, cc, 1]
+                            out[ss, rr, cc, 2] -= aux * grad_static[ss, rr, cc, 2]
+    return out, energy
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def compute_cc_backward_step_3d_nofactors(floating[:, :, :] static, floating[:, :, :] moving,
+                                          floating[:, :, :, :] grad_moving, cnp.npy_intp radius):
+    cdef:
+        cnp.npy_intp ns = static.shape[0]
+        cnp.npy_intp nr = static.shape[1]
+        cnp.npy_intp nc = static.shape[2]
+        cnp.npy_intp side = 2 * radius + 1
+        cnp.npy_intp firstc, lastc, firstr, lastr, firsts, lasts
+        cnp.npy_intp s, r, c, idx, sides, sider, sidec
+        double cnt, energy = 0
+        cnp.npy_intp ssss, sss, ss, rr, cc, prev_ss, prev_rr, prev_cc
+        double Imean, Jmean, Ii, Ji, sfm, sff, smm, localCorrelation, aux
+        double[:, :, :, :] temp = np.zeros((2, nr, nc, 5), dtype=np.float64)
+        floating[:, :, :, :] out = np.zeros((ns, nr, nc, 3),
+                                            dtype=np.asarray(grad_moving).dtype)
+    with nogil:
+        sss = 1
+        for s in range(ns+radius):
+            ss = _mod(s - radius, ns)
+            sss = 1 - sss
+            firsts = _int_max(0, ss - radius)
+            lasts = _int_min(ns - 1, ss + radius)
+            sides = (lasts - firsts + 1)
+            for r in range(nr+radius):
+                rr = _mod(r - radius, nr)
+                firstr = _int_max(0, rr - radius)
+                lastr = _int_min(nr - 1, rr + radius)
+                sider = (lastr - firstr + 1)
+                for c in range(nc+radius):
+                    cc = _mod(c - radius, nc)
+                    # New corner
+                    _increment_factors(temp, moving, static, sss, rr, cc, s, r, c, 0)
+                    # Add signed sub-volumes
+                    if s>0:
+                        prev_ss = 1 - sss
+                        for idx in range(5):
+                            temp[sss, rr, cc, idx] += temp[prev_ss, rr, cc, idx]
+                        if r>0:
+                            prev_rr = _mod(rr-1, nr)
+                            for idx in range(5):
+                                temp[sss, rr, cc, idx] -= temp[prev_ss, prev_rr, cc, idx]
+                            if c>0:
+                                prev_cc = _mod(cc-1, nc)
+                                for idx in range(5):
+                                    temp[sss, rr, cc, idx] += temp[prev_ss, prev_rr, prev_cc, idx]
+                        if c>0:
+                            prev_cc = _mod(cc-1, nc)
+                            for idx in range(5):
+                                temp[sss, rr, cc, idx] -= temp[prev_ss, rr, prev_cc, idx]
+                    if(r>0):
+                        prev_rr = _mod(rr-1, nr)
+                        for idx in range(5):
+                            temp[sss, rr, cc, idx] += temp[sss, prev_rr, cc, idx]
+                        if(c>0):
+                            prev_cc = _mod(cc-1, nc)
+                            for idx in range(5):
+                                temp[sss, rr, cc, idx] -= temp[sss, prev_rr, prev_cc, idx]
+                    if(c>0):
+                        prev_cc = _mod(cc-1, nc)
+                        for idx in range(5):
+                            temp[sss, rr, cc, idx] += temp[sss, rr, prev_cc, idx]
+                    # Add signed corners
+                    if s>=side:
+                        _increment_factors(temp, moving, static, sss, rr, cc, s-side, r, c, -1)
+                        if r>=side:
+                            _increment_factors(temp, moving, static, sss, rr, cc, s-side, r-side, c, 1)
+                            if c>=side:
+                                _increment_factors(temp, moving, static, sss, rr, cc, s-side, r-side, c-side, -1)
+                        if c>=side:
+                            _increment_factors(temp, moving, static, sss, rr, cc, s-side, r, c-side, 1)
+                    if r>=side:
+                        _increment_factors(temp, moving, static, sss, rr, cc, s, r-side, c, -1)
+                        if c>=side:
+                            _increment_factors(temp, moving, static, sss, rr, cc, s, r-side, c-side, 1)
+
+                    if c>=side:
+                        _increment_factors(temp, moving, static, sss, rr, cc, s, r, c-side, -1)
+                    # Compute final factors
+                    if ss>=radius and ss<ns-radius and rr>=radius and rr<nr-radius and cc>=radius and cc<nc-radius:
+                        firstc = _int_max(0, cc - radius)
+                        lastc = _int_min(nc - 1, cc + radius)
+                        sidec = (lastc - firstc + 1)
+                        cnt = sides*sider*sidec
+
+                        Imean = temp[sss, rr, cc, SI] / cnt
+                        Jmean = temp[sss, rr, cc, SJ] / cnt
+                        Ii = static[ss, rr, cc] - Imean
+                        Ji = moving[ss, rr, cc] - Jmean
+                        sfm = (temp[sss, rr, cc, SIJ] - Jmean * temp[sss, rr, cc, SI] -
+                            Imean * temp[sss, rr, cc, SJ] + cnt * Jmean * Imean)
+                        sff = (temp[sss, rr, cc, SI2] - Imean * temp[sss, rr, cc, SI] -
+                            Imean * temp[sss, rr, cc, SI] + cnt * Imean * Imean)
+                        smm = (temp[sss, rr, cc, SJ2] - Jmean * temp[sss, rr, cc, SJ] -
+                            Jmean * temp[sss, rr, cc, SJ] + cnt * Jmean * Jmean)
+                        if not (sff == 0.0 or smm == 0.0):
+                            localCorrelation = 0
+                            if(sff * smm > 1e-5):
+                                localCorrelation = sfm * sfm / (sff * smm)
+                            if(localCorrelation < 1):  # avoid bad values...
+                                energy -= localCorrelation
+                            aux = 2.0 * sfm / (sff * smm) * (Ii - sfm / smm * Ji)
+                            out[ss, rr, cc, 0] -= aux * grad_moving[ss, rr, cc, 0]
+                            out[ss, rr, cc, 1] -= aux * grad_moving[ss, rr, cc, 1]
+                            out[ss, rr, cc, 2] -= aux * grad_moving[ss, rr, cc, 2]
+    return out, energy

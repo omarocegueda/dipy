@@ -159,24 +159,22 @@ def test_compute_cc_steps_3d():
     Gnoise = np.random.ranf(np.size(G)).reshape(G.shape) * G.max() * 0.1
     Gnoise = Gnoise.astype(floating)
     G += Gnoise
-
-    #precompute the cross correlation factors
-    factors = cc.precompute_cc_factors_3d_test(F, G, radius)
-    factors = np.array(factors, dtype = floating)
-
-    #test the forward step against the exact expression
-    I = factors[..., 0]
-    J = factors[..., 1]
-    sfm = factors[..., 2]
-    sff = factors[..., 3]
-    smm = factors[..., 4]
     expected = np.ndarray(shape = sh + (3,), dtype = floating)
-    expected[...,0] = (-2.0 * sfm / (sff * smm)) * (J - (sfm / sff) * I) * grad_F[..., 0]
-    expected[...,1] = (-2.0 * sfm / (sff * smm)) * (J - (sfm / sff) * I) * grad_F[..., 1]
-    expected[...,2] = (-2.0 * sfm / (sff * smm)) * (J - (sfm / sff) * I) * grad_F[..., 2]
-    actual, energy = cc.compute_cc_forward_step_3d(grad_F, factors, 0)
-    assert_array_almost_equal(actual, expected)
     for radius in range(1,5):
+        #precompute the cross correlation factors
+        factors = cc.precompute_cc_factors_3d_test(F, G, radius)
+        factors = np.array(factors, dtype = floating)
+
+        #test the forward step against the exact expression
+        I = factors[..., 0]
+        J = factors[..., 1]
+        sfm = factors[..., 2]
+        sff = factors[..., 3]
+        smm = factors[..., 4]
+
+        expected[...,0] = (-2.0 * sfm / (sff * smm)) * (J - (sfm / sff) * I) * grad_F[..., 0]
+        expected[...,1] = (-2.0 * sfm / (sff * smm)) * (J - (sfm / sff) * I) * grad_F[..., 1]
+        expected[...,2] = (-2.0 * sfm / (sff * smm)) * (J - (sfm / sff) * I) * grad_F[..., 2]
         expected[:radius, ...] = 0
         expected[:, :radius, ...] = 0
         expected[:, :, :radius, :] = 0
@@ -185,14 +183,23 @@ def test_compute_cc_steps_3d():
         expected[:, :, -radius::, ...] = 0
         actual, energy = cc.compute_cc_forward_step_3d(grad_F, factors, radius)
         assert_array_almost_equal(actual, expected)
+        actual, energy = cc.compute_cc_forward_step_3d_nofactors(F, G, grad_F, radius)
+        assert_array_almost_equal(actual, expected)
 
-    #test the backward step against the exact expression
-    expected[...,0] = (-2.0 * sfm / (sff * smm)) * (I - (sfm / smm) * J) * grad_G[..., 0]
-    expected[...,1] = (-2.0 * sfm / (sff * smm)) * (I - (sfm / smm) * J) * grad_G[..., 1]
-    expected[...,2] = (-2.0 * sfm / (sff * smm)) * (I - (sfm / smm) * J) * grad_G[..., 2]
-    actual, energy = cc.compute_cc_backward_step_3d(grad_G, factors, 0)
-    assert_array_almost_equal(actual, expected)
     for radius in range(1,5):
+        #precompute the cross correlation factors
+        factors = cc.precompute_cc_factors_3d_test(F, G, radius)
+        factors = np.array(factors, dtype = floating)
+
+        #test the forward step against the exact expression
+        I = factors[..., 0]
+        J = factors[..., 1]
+        sfm = factors[..., 2]
+        sff = factors[..., 3]
+        smm = factors[..., 4]
+        expected[...,0] = (-2.0 * sfm / (sff * smm)) * (I - (sfm / smm) * J) * grad_G[..., 0]
+        expected[...,1] = (-2.0 * sfm / (sff * smm)) * (I - (sfm / smm) * J) * grad_G[..., 1]
+        expected[...,2] = (-2.0 * sfm / (sff * smm)) * (I - (sfm / smm) * J) * grad_G[..., 2]
         expected[:radius, ...] = 0
         expected[:, :radius, ...] = 0
         expected[:, :, :radius, :] = 0
@@ -200,6 +207,8 @@ def test_compute_cc_steps_3d():
         expected[:, -radius::, ...] = 0
         expected[:, :, -radius::, ...] = 0
         actual, energy = cc.compute_cc_backward_step_3d(grad_G, factors, radius)
+        assert_array_almost_equal(actual, expected)
+        actual, energy = cc.compute_cc_backward_step_3d_nofactors(F, G, grad_G, radius)
         assert_array_almost_equal(actual, expected)
 
 
