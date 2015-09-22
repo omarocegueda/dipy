@@ -103,28 +103,49 @@ each level of the pyramid. The 0-th level corresponds to the finest resolution.
 """
 
 level_iters = [10, 10, 10]
-sdr = SymmetricDiffeomorphicRegistration(metric, level_iters, inv_iter=20, inv_tol=1e-3,step_length=0.35)
+sdr_fp = SymmetricDiffeomorphicRegistration(metric, level_iters, inv_iter=20, inv_tol=1e-3,step_length=0.25)
 from dipy.align import VerbosityLevels
-sdr.verbosity = VerbosityLevels.DIAGNOSE
+sdr_fp.verbosity = VerbosityLevels.DIAGNOSE
 """
 Execute the optimization, which returns a DiffeomorphicMap object,
 that can be used to register images back and forth between the static and moving
 domains. We provide the pre-aligning matrix that brings the moving image closer
 to the static image
 """
-
-mapping = sdr.optimize(static, moving, static_affine, moving_affine, pre_align)
+s2r_fp, m2r_fp = sdr_fp.optimize(static, moving, static_affine, moving_affine, pre_align, return_partial=True)
+mapping_fp = m2r_fp.warp_endomorphism(s2r_fp.inverse()).inverse()
 
 """
 Now let's warp the moving image and see if it gets similar to the static image
 """
 
-warped_moving = mapping.transform(moving)
+warped_moving = mapping_fp.transform(moving)
 
 
+from inverse.dfinverse_3d import compute_jacobian_3d
+jac_fwd_fp = np.array(compute_jacobian_3d(mapping_fp.forward))
+jac_bwd_fp = np.array(compute_jacobian_3d(mapping_fp.backward))
+jac_fwd_fwd_fp = np.array(compute_jacobian_3d(s2r_fp.forward))
+jac_fwd_bwd_fp = np.array(compute_jacobian_3d(s2r_fp.backward))
+jac_bwd_fwd_fp = np.array(compute_jacobian_3d(m2r_fp.forward))
+jac_bwd_bwd_fp = np.array(compute_jacobian_3d(m2r_fp.backward))
+
+# debug_cube(mapping_fp.forward, 38, 18, 14, 38, 18, 14)
+# debug_cube(mapping_fp.forward, 60, 71, 45, 60, 71, 45)
 
 
+sdr_new = SymmetricDiffeomorphicRegistration(metric, level_iters, inv_iter=20, inv_tol=1e-3,step_length=0.25, inv_type='new')
+from dipy.align import VerbosityLevels
+sdr_new.verbosity = VerbosityLevels.DIAGNOSE
+s2r_new, m2r_new = sdr_new.optimize(static, moving, static_affine, moving_affine, pre_align, return_partial=True)
+mapping_new = m2r_new.warp_endomorphism(s2r_new.inverse()).inverse()
 
+jac_fwd_new = np.array(compute_jacobian_3d(mapping_new.forward))
+jac_bwd_new = np.array(compute_jacobian_3d(mapping_new.backward))
+jac_fwd_fwd_new = np.array(compute_jacobian_3d(s2r_new.forward))
+jac_fwd_bwd_new = np.array(compute_jacobian_3d(s2r_new.backward))
+jac_bwd_fwd_new = np.array(compute_jacobian_3d(m2r_new.forward))
+jac_bwd_bwd_new = np.array(compute_jacobian_3d(m2r_new.backward))
 
 import os
 import pickle
@@ -153,7 +174,17 @@ for z0 in [20, 40, 60]:
 
 
 
-
+v = np.array(mapping_new.forward)
+w = np.array(mapping_new.backward)
+mlab.figure(bgcolor=(1,1,1))
+for z0 in [20, 40, 60]:
+    hor, ver = get_z_slice(z0, 0, 81, 0, 106, npoints=75)
+    for line  in hor:
+        warped = np.array(warp_points_3d(line, w))
+        mlab.plot3d(warped[:,0], warped[:,1], warped[:,2], color=(0,0,0), tube_radius=0.01)
+    for line  in ver:
+        warped = np.array(warp_points_3d(line, w))
+        mlab.plot3d(warped[:,0], warped[:,1], warped[:,2], color=(0,0,0), tube_radius=0.01)
 
 
 

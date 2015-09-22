@@ -1304,7 +1304,8 @@ def invert_vector_field_fixed_point_3d(floating[:, :, :, :] d,
     with nogil:
         iter_count = 0
         difmag = 1
-        while (tol < difmag) and (iter_count < max_iter) and (1e-3 < error):
+        while (0.1 < difmag) and (iter_count < max_iter) and (tol < error):
+        #while (tol < difmag) and (iter_count < max_iter) and (1e-3 < error):
         #while (tol < difmag) and (iter_count < max_iter):
             if iter_count == 0:
                 epsilon = 0.75
