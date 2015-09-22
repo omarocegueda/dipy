@@ -13,8 +13,10 @@ from . import VerbosityLevels
 from . import Bunch
 from .scalespace import ScaleSpace
 from inverse.inverse_3d import invert_vf_full_box_3d
+from inverse.dfinverse_3d import compute_jacobian_3d
 from inverse.inverse_2d import invert_vf_full_box_2d
 default_inv_type = 'fp'
+
 
 RegistrationStages = Bunch(INIT_START=0,
                            INIT_END=1,
@@ -1594,6 +1596,13 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             print('Moving-Reference Residual error: %e, %e (%e)'
                   % (stats[0], stats[1], stats[2]))
 
+        jac_fwd_fwd = np.array(compute_jacobian_3d(self.static_to_ref.forward))
+        jac_fwd_bwd = np.array(compute_jacobian_3d(self.static_to_ref.backward))
+        jac_bwd_fwd = np.array(compute_jacobian_3d(self.moving_to_ref.forward))
+        jac_bwd_bwd = np.array(compute_jacobian_3d(self.moving_to_ref.backward))
+        print("Min Jacobians: fwd_fwd: %e, fwd_bwd: %e, bwd_fwd: %e, bwd_bwd: %e"%(jac_fwd_fwd.min(), jac_fwd_bwd.min(), jac_bwd_fwd.min(), jac_bwd_bwd.min()))
+        print("Total neg Jac: fwd_fwd: %d, fwd_bwd: %d, bwd_fwd: %d, bwd_bwd: %d"%((jac_fwd_fwd<0).sum(), (jac_fwd_bwd<0).sum(), (jac_bwd_fwd<0).sum(), (jac_bwd_bwd<0).sum()))
+
         if return_partial:
             return self.static_to_ref, self.moving_to_ref
 
@@ -1610,7 +1619,10 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.full_stats['composition_error_bwd'] = np.array(stats).copy()
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
             print('Final residual error(bwd): %e, %e (%e)' % (stats[0], stats[1], stats[2]))
-
+        jac_fwd = np.array(compute_jacobian_3d(self.static_to_ref.forward))
+        jac_bwd = np.array(compute_jacobian_3d(self.static_to_ref.backward))
+        print("Min Jacobians: fwd: %e, bwd: %e"%(jac_fwd.min(), jac_bwd.min()))
+        print("Total neg Jac: fwd: %d, bwd: %d"%((jac_fwd<0).sum(), (jac_bwd<0).sum()))
 
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
