@@ -658,23 +658,20 @@ def compute_cc_backward_step_2d(floating[:, :, :] grad_moving,
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def window_sums(floating[:,:,:] v, int d, floating[:,:,:] out):
+def window_sums(floating[:,:,:] v, int d, int exponent=1):
+    ftype = np.asarray(v).dtype
     cdef:
         cnp.npy_intp ns = v.shape[0]
         cnp.npy_intp nr = v.shape[1]
         cnp.npy_intp nc = v.shape[2]
-        cnp.npy_intp firstc, lastc, firstr, lastr, firsts, lasts
         cnp.npy_intp s, r, c, i, j, k
-        floating ss, dd
+        floating[:,:,:] out = np.empty((ns, nr, nc), dtype=ftype)
     with nogil:
         for s in range(ns):
-            firsts = _int_max(0, s - d + 1)
             for r in range(nr):
-                firstr = _int_max(0, r - d + 1)
                 for c in range(nc):
-                    firstc = _int_max(0, c - d + 1)
                     # New corner
-                    out[s, r, c] = v[s,r,c]
+                    out[s, r, c] = v[s,r,c]**exponent
                     # Add signed sub-volumes
                     if s>0:
                         out[s, r, c] += out[s-1,r,c]
@@ -690,34 +687,109 @@ def window_sums(floating[:,:,:] v, int d, floating[:,:,:] out):
                             out[s, r, c] -= out[s,r-1,c-1]
                     if(c>0):
                         out[s, r, c] += out[s,r,c-1]
+
                     # Add signed corners
                     if s>=d:
-                        out[s,r,c] -= v[s-d,r,c]
+                        out[s,r,c] -= v[s-d,r,c]**exponent
                         if r>=d:
-                            out[s,r,c] += v[s-d,r-d,c]
+                            out[s,r,c] += v[s-d,r-d,c]**exponent
                             if c>=d:
-                                out[s,r,c] -= v[s-d,r-d,c-d]
+                                out[s,r,c] -= v[s-d,r-d,c-d]**exponent
                         if c>=d:
-                            out[s,r,c] += v[s-d,r,c-d]
+                            out[s,r,c] += v[s-d,r,c-d]**exponent
                     if r>=d:
-                        out[s,r,c] -= v[s,r-d,c]
+                        out[s,r,c] -= v[s,r-d,c]**exponent
                         if c>=d:
-                            out[s,r,c] += v[s,r-d,c-d]
-
+                            out[s,r,c] += v[s,r-d,c-d]**exponent
                     if c>=d:
-                        out[s,r,c] -= v[s,r,c-d]
+                        out[s,r,c] -= v[s,r,c-d]**exponent
 
-                    ss = 0
+    return out
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def window_sums_integral(floating[:,:,:] v, int d, int exponent=1):
+    ftype = np.asarray(v).dtype
+    cdef:
+        cnp.npy_intp ns = v.shape[0]
+        cnp.npy_intp nr = v.shape[1]
+        cnp.npy_intp nc = v.shape[2]
+        cnp.npy_intp s, r, c
+        floating[:] c1 = np.zeros((nc,), dtype=ftype)
+        floating[:,:] c2 = np.zeros((nr, nc), dtype=ftype)
+        floating[:,:,:] iv = np.empty((ns, nr, nc), dtype=ftype)
+        floating[:,:,:] out = np.empty((ns, nr, nc), dtype=ftype)
+    with nogil:
+        # Precompute integral volume
+        for s in range(ns):
+            for r in range(nr):
+                for c in range(nc):
+                    # New corner
+                    c1[c] = v[s, r, c]**exponent
+                    # Add to prevous c1 (if it exists)
+                    if c>0:
+                        c1[c] += c1[c-1]
+                    # Initialize c2 with current c1
+                    c2[r, c] = c1[c]
+                    # Accumulate previous c2 (if it exists)
+                    if r>0:
+                        c2[r, c] += c2[r-1, c]
+                    # Initialize iv with current c2
+                    iv[s, r, c] = c2[r, c]
+                    # Accumulate with previous iv (if it exists)
+                    if s>0:
+                        iv[s, r, c] += iv[s-1, r, c]
+
+        # Use the integral volume to compute the integral over rectangles
+        for s in range(ns):
+            for r in range(nr):
+                for c in range(nc):
+                    out[s, r, c] = iv[s, r, c]
+                    if s >= d:
+                        out[s, r, c] -= iv[s-d, r, c]
+                        if r >= d:
+                            out[s, r, c] += iv[s-d, r-d, c]
+                            if c >= d:
+                                out[s, r, c] -= iv[s-d, r-d, c-d]
+                        if c >= d:
+                            out[s, r, c] += iv[s-d, r, c-d]
+                    if r >= d:
+                        out[s, r, c] -= iv[s, r-d, c]
+                        if c >= d:
+                            out[s, r, c] += iv[s, r - d, c - d]
+                    if c >= d:
+                        out[s, r, c] -= iv[s, r, c - d]
+    return out
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def window_sums_direct(floating[:,:,:] v, int d, int exponent=1):
+    ftype = np.asarray(v).dtype
+    cdef:
+        cnp.npy_intp ns = v.shape[0]
+        cnp.npy_intp nr = v.shape[1]
+        cnp.npy_intp nc = v.shape[2]
+        cnp.npy_intp firstc, firstr, firsts
+        cnp.npy_intp s, r, c, i, j, k
+        floating[:,:,:] out = np.empty((ns, nr, nc), dtype=ftype)
+    with nogil:
+        for s in range(ns):
+            firsts = _int_max(0, s - d + 1)
+            for r in range(nr):
+                firstr = _int_max(0, r - d + 1)
+                for c in range(nc):
+                    firstc = _int_max(0, c - d + 1)
+                    out[s, r, c] = 0
                     for k in range(firsts, 1 + s):
                         for i in range(firstr, 1 + r):
                             for j in range(firstc, 1 + c):
-                                ss += v[k,i,j]
-                    dd = ss - out[s,r,c]
-                    if dd<0:
-                        dd = -dd
-                    if(dd>1e-4):
-                        with gil:
-                            print(s,r,c,out[s,r,c], ss, dd)
+                                out[s, r, c] += v[k, i, j]**exponent
+    return out
+
 
 
 @cython.boundscheck(False)
@@ -866,11 +938,57 @@ def precompute_cc_factors_3d(floating[:, :, :] static, floating[:, :, :] moving,
     return factors
 
 
+cdef inline double _cc_forward_gradient(double cnt, double Ii, double Ji,
+                                 double sfm, double sff, double smm,
+                                 double img_gradx, double img_grady,
+                                 double img_gradz, double *out)nogil:
+    cdef:
+        double aux
+        double cc
+    if not (sff == 0.0 or smm == 0.0):
+        cc = 0
+        if(sff * smm > 1e-5):
+            cc = sfm * sfm / (sff * smm)
+        aux = -2.0 * sfm / (sff * smm) * (Ji - sfm / sff * Ii)
+        out[0] = aux * img_gradx
+        out[1] = aux * img_grady
+        out[2] = aux * img_gradz
+        return cc
+    out[0] = 0.0
+    out[1] = 0.0
+    out[2] = 0.0
+    return 0.0
+
+cdef inline double _cc_backward_gradient(double cnt, double Ii, double Ji,
+                                  double sfm, double sff, double smm,
+                                  double img_gradx, double img_grady,
+                                  double img_gradz, double *out)nogil:
+    cdef:
+        double aux
+        double cc
+    if not (sff == 0.0 or smm == 0.0):
+        cc = 0
+        if(sff * smm > 1e-5):
+            cc = sfm * sfm / (sff * smm)
+        aux = -2.0 * sfm / (sff * smm) * (Ii - sfm / smm * Ji)
+        out[0] = aux * img_gradx
+        out[1] = aux * img_grady
+        out[2] = aux * img_gradz
+        return cc
+    out[0] = 0.0
+    out[1] = 0.0
+    out[2] = 0.0
+    return 0.0
+
+
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def compute_cc_forward_step_3d_nofactors(floating[:, :, :] static, floating[:, :, :] moving,
-                                         floating[:, :, :, :] grad_static, cnp.npy_intp radius):
+def compute_cc_steps_3d_nofactors(floating[:, :, :] static, floating[:, :, :] moving,
+                                  floating[:, :, :, :] grad_static,
+                                  floating[:, :, :, :] grad_moving,
+                                  cnp.npy_intp radius):
     cdef:
         cnp.npy_intp ns = static.shape[0]
         cnp.npy_intp nr = static.shape[1]
@@ -878,26 +996,29 @@ def compute_cc_forward_step_3d_nofactors(floating[:, :, :] static, floating[:, :
         cnp.npy_intp side = 2 * radius + 1
         cnp.npy_intp firstc, lastc, firstr, lastr, firsts, lasts
         cnp.npy_intp s, r, c, idx, sides, sider, sidec
-        double cnt, energy = 0
+        double cnt, fwd_energy = 0, bwd_energy = 0
         cnp.npy_intp ssss, sss, ss, rr, cc, prev_ss, prev_rr, prev_cc
         double Imean, Jmean, Ii, Ji, sfm, sff, smm, localCorrelation, aux
         double[:, :, :, :] temp = np.zeros((2, nr, nc, 5), dtype=np.float64)
-        floating[:, :, :, :] out = np.zeros((ns, nr, nc, 3),
-                                            dtype=np.asarray(grad_static).dtype)
+        double *grad = [0,0,0]
+        floating[:, :, :, :] fwd_step = np.zeros((ns, nr, nc, 3),
+                                                 dtype=np.asarray(grad_static).dtype)
+        floating[:, :, :, :] bwd_step = np.zeros((ns, nr, nc, 3),
+                                                 dtype=np.asarray(grad_static).dtype)
     with nogil:
         sss = 1
-        for s in range(ns+radius):
+        for s in range(ns):
             ss = _mod(s - radius, ns)
             sss = 1 - sss
             firsts = _int_max(0, ss - radius)
             lasts = _int_min(ns - 1, ss + radius)
             sides = (lasts - firsts + 1)
-            for r in range(nr+radius):
+            for r in range(nr):
                 rr = _mod(r - radius, nr)
                 firstr = _int_max(0, rr - radius)
                 lastr = _int_min(nr - 1, rr + radius)
                 sider = (lastr - firstr + 1)
-                for c in range(nc+radius):
+                for c in range(nc):
                     cc = _mod(c - radius, nc)
                     # New corner
                     _increment_factors(temp, moving, static, sss, rr, cc, s, r, c, 0)
@@ -963,24 +1084,138 @@ def compute_cc_forward_step_3d_nofactors(floating[:, :, :] static, floating[:, :
                             Imean * temp[sss, rr, cc, SI] + cnt * Imean * Imean)
                         smm = (temp[sss, rr, cc, SJ2] - Jmean * temp[sss, rr, cc, SJ] -
                             Jmean * temp[sss, rr, cc, SJ] + cnt * Jmean * Jmean)
-                        if not (sff == 0.0 or smm == 0.0):
-                            localCorrelation = 0
-                            if(sff * smm > 1e-5):
-                                localCorrelation = sfm * sfm / (sff * smm)
-                            if(localCorrelation < 1):  # avoid bad values...
-                                energy -= localCorrelation
-                            aux = 2.0 * sfm / (sff * smm) * (Ji - sfm / sff * Ii)
-                            out[ss, rr, cc, 0] -= aux * grad_static[ss, rr, cc, 0]
-                            out[ss, rr, cc, 1] -= aux * grad_static[ss, rr, cc, 1]
-                            out[ss, rr, cc, 2] -= aux * grad_static[ss, rr, cc, 2]
-    return out, energy
+
+                        localCorrelation = _cc_forward_gradient(cnt, Ii, Ji, sfm, sff, smm,
+                                                                grad_static[ss, rr, cc, 0],
+                                                                grad_static[ss, rr, cc, 1],
+                                                                grad_static[ss, rr, cc, 2],
+                                                                grad)
+                        fwd_energy -= localCorrelation
+                        fwd_step[ss, rr, cc, 0] = grad[0]
+                        fwd_step[ss, rr, cc, 1] = grad[1]
+                        fwd_step[ss, rr, cc, 2] = grad[2]
+                        localCorrelation = _cc_backward_gradient(cnt, Ii, Ji, sfm, sff, smm,
+                                                                 grad_moving[ss, rr, cc, 0],
+                                                                 grad_moving[ss, rr, cc, 1],
+                                                                 grad_moving[ss, rr, cc, 2],
+                                                                 grad)
+                        bwd_energy -= localCorrelation
+                        bwd_step[ss, rr, cc, 0] = grad[0]
+                        bwd_step[ss, rr, cc, 1] = grad[1]
+                        bwd_step[ss, rr, cc, 2] = grad[2]
+    return fwd_step, bwd_step, fwd_energy, bwd_energy
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def compute_cc_backward_step_3d_nofactors(floating[:, :, :] static, floating[:, :, :] moving,
-                                          floating[:, :, :, :] grad_moving, cnp.npy_intp radius):
+def compute_cc_steps_3d_nofactors_test(floating[:, :, :] static, floating[:, :, :] moving,
+                                       floating[:, :, :, :] grad_static,
+                                       floating[:, :, :, :] grad_moving,
+                                       int radius):
+    r"""Precomputations to quickly compute the gradient of the CC Metric
+
+    This version of precompute_cc_factors_3d is for testing purposes, it
+    directly computes the local cross-correlation factors without any
+    optimization, so it is less error-prone than the accelerated version.
+    """
+    cdef:
+        cnp.npy_intp ns = static.shape[0]
+        cnp.npy_intp nr = static.shape[1]
+        cnp.npy_intp nc = static.shape[2]
+        cnp.npy_intp s, r, c, k, i, j, t, firstc, lastc, firstr, lastr, firsts, lasts
+        double Imean, Jmean, Ii, Ji, sfm, sff, smm, localCorrelation
+        double[:] sums = np.zeros((6,), dtype=np.float64)
+        double *grad = [0,0,0]
+        double fwd_energy = 0, bwd_energy = 0
+        floating[:, :, :, :] fwd_step = np.zeros((ns, nr, nc, 3),
+                                                 dtype=np.asarray(grad_static).dtype)
+        floating[:, :, :, :] bwd_step = np.zeros((ns, nr, nc, 3),
+                                                 dtype=np.asarray(grad_static).dtype)
+
+    with nogil:
+        for s in range(ns):
+            firsts = _int_max(0, s - radius)
+            lasts = _int_min(ns - 1, s + radius)
+            for r in range(nr):
+                firstr = _int_max(0, r - radius)
+                lastr = _int_min(nr - 1, r + radius)
+                for c in range(nc):
+                    firstc = _int_max(0, c - radius)
+                    lastc = _int_min(nc - 1, c + radius)
+                    for t in range(6):
+                        sums[t] = 0
+                    for k in range(firsts, 1 + lasts):
+                        for i in range(firstr, 1 + lastr):
+                            for j in range(firstc, 1 + lastc):
+                                sums[SI] += static[k, i, j]
+                                sums[SI2] += static[k, i,j]**2
+                                sums[SJ] += moving[k, i,j]
+                                sums[SJ2] += moving[k, i,j]**2
+                                sums[SIJ] += static[k,i,j]*moving[k, i,j]
+                                sums[CNT] += 1
+                    if s<radius or s>=ns-radius or r<radius or r>=nr-radius or c<radius or c>=nc-radius:
+                        continue
+                    Imean = sums[SI] / sums[CNT]
+                    Jmean = sums[SJ] / sums[CNT]
+                    Ii = static[s, r, c] - Imean
+                    Ji = moving[s, r, c] - Jmean
+                    sfm = (sums[SIJ] - Jmean * sums[SI] - Imean * sums[SJ] + sums[CNT] * Jmean * Imean)
+                    sff = (sums[SI2] - Imean * sums[SI] - Imean * sums[SI] + sums[CNT] * Imean * Imean)
+                    smm = (sums[SJ2] - Jmean * sums[SJ] - Jmean * sums[SJ] + sums[CNT] * Jmean * Jmean)
+                    localCorrelation = _cc_forward_gradient(sums[CNT], Ii, Ji, sfm, sff, smm,
+                                                            grad_static[s, r, c, 0],
+                                                            grad_static[s, r, c, 1],
+                                                            grad_static[s, r, c, 2],
+                                                            grad)
+                    fwd_energy -= localCorrelation
+                    fwd_step[s, r, c, 0] = grad[0]
+                    fwd_step[s, r, c, 1] = grad[1]
+                    fwd_step[s, r, c, 2] = grad[2]
+                    localCorrelation = _cc_backward_gradient(sums[CNT], Ii, Ji, sfm, sff, smm,
+                                                             grad_moving[s, r, c, 0],
+                                                             grad_moving[s, r, c, 1],
+                                                             grad_moving[s, r, c, 2],
+                                                             grad)
+                    bwd_energy -= localCorrelation
+                    bwd_step[s, r, c, 0] = grad[0]
+                    bwd_step[s, r, c, 1] = grad[1]
+                    bwd_step[s, r, c, 2] = grad[2]
+    return fwd_step, bwd_step, fwd_energy, bwd_energy
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+cdef inline void _eval_iv_rectangle(double[:,:,:,:] iv, int x, int y, int z, int d, double *out)nogil:
+    cdef:
+        int idx
+    for idx in range(5):
+        out[idx] = iv[x, y, z, idx]
+        if x>=d:
+            out[idx] -= iv[x-d, y, z, idx]
+            if y>=d:
+                out[idx] += iv[x-d, y-d, z, idx]
+                if z>=d:
+                    out[idx] -= iv[x-d, y-d, z-d, idx]
+            if z>=d:
+                out[idx] += iv[x-d, y, z-d, idx]
+        if y>=d:
+            out[idx] -= iv[x, y-d, z, idx]
+            if z>=d:
+                out[idx] += iv[x, y-d, z-d, idx]
+        if z>=d:
+            out[idx] -= iv[x, y, z-d, idx]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def compute_cc_steps_3d_integral(floating[:, :, :] static, floating[:, :, :] moving,
+                                 floating[:, :, :, :] grad_static,
+                                 floating[:, :, :, :] grad_moving,
+                                 cnp.npy_intp radius):
     cdef:
         cnp.npy_intp ns = static.shape[0]
         cnp.npy_intp nr = static.shape[1]
@@ -988,99 +1223,85 @@ def compute_cc_backward_step_3d_nofactors(floating[:, :, :] static, floating[:, 
         cnp.npy_intp side = 2 * radius + 1
         cnp.npy_intp firstc, lastc, firstr, lastr, firsts, lasts
         cnp.npy_intp s, r, c, idx, sides, sider, sidec
-        double cnt, energy = 0
-        cnp.npy_intp ssss, sss, ss, rr, cc, prev_ss, prev_rr, prev_cc
-        double Imean, Jmean, Ii, Ji, sfm, sff, smm, localCorrelation, aux
-        double[:, :, :, :] temp = np.zeros((2, nr, nc, 5), dtype=np.float64)
-        floating[:, :, :, :] out = np.zeros((ns, nr, nc, 3),
-                                            dtype=np.asarray(grad_moving).dtype)
+        double cnt, fwd_energy = 0, bwd_energy = 0
+        double Imean, Jmean, Ii, Ji, sfm, sff, smm, localCorrelation
+        double *grad = [0,0,0]
+        double *iv_eval = [0,0,0,0,0]
+        floating[:, :, :, :] fwd_step = np.zeros((ns, nr, nc, 3),
+                                                 dtype=np.asarray(grad_static).dtype)
+        floating[:, :, :, :] bwd_step = np.zeros((ns, nr, nc, 3),
+                                                 dtype=np.asarray(grad_static).dtype)
+        double[:,:,:,:] c1 = np.zeros((1, 1, nc, 5), dtype=np.float64)
+        double[:,:,:,:] c2 = np.zeros((1, nr, nc, 5), dtype=np.float64)
+        double[:,:,:,:] iv = np.zeros((ns, nr, nc, 5), dtype=np.float64)
+
     with nogil:
-        sss = 1
-        for s in range(ns+radius):
-            ss = _mod(s - radius, ns)
-            sss = 1 - sss
-            firsts = _int_max(0, ss - radius)
-            lasts = _int_min(ns - 1, ss + radius)
-            sides = (lasts - firsts + 1)
-            for r in range(nr+radius):
-                rr = _mod(r - radius, nr)
-                firstr = _int_max(0, rr - radius)
-                lastr = _int_min(nr - 1, rr + radius)
-                sider = (lastr - firstr + 1)
-                for c in range(nc+radius):
-                    cc = _mod(c - radius, nc)
+        # Precompute integral images
+        for s in range(ns):
+            for r in range(nr):
+                for c in range(nc):
                     # New corner
-                    _increment_factors(temp, moving, static, sss, rr, cc, s, r, c, 0)
-                    # Add signed sub-volumes
+                    _increment_factors(c1, moving, static, 0, 0, c, s, r, c, 0)
+                    # Add to prevous c1 (if it exists)
+                    if c>0:
+                        for idx in range(5):
+                            c1[0, 0, c, idx] += c1[0, 0, c-1, idx]
+                    # Initialize c2 with current c1
+                    for idx in range(5):
+                        c2[0, r, c, idx] = c1[0, 0, c, idx]
+                    # Accumulate previous c2 (if it exists)
+                    if r>0:
+                        for idx in range(5):
+                            c2[0, r, c, idx] += c2[0, r-1, c, idx]
+                    # Initialize iv with current c2
+                    for idx in range(5):
+                        iv[s, r, c, idx] = c2[0, r, c, idx]
+                    # Accumulate with previous iv (if it exists)
                     if s>0:
-                        prev_ss = 1 - sss
                         for idx in range(5):
-                            temp[sss, rr, cc, idx] += temp[prev_ss, rr, cc, idx]
-                        if r>0:
-                            prev_rr = _mod(rr-1, nr)
-                            for idx in range(5):
-                                temp[sss, rr, cc, idx] -= temp[prev_ss, prev_rr, cc, idx]
-                            if c>0:
-                                prev_cc = _mod(cc-1, nc)
-                                for idx in range(5):
-                                    temp[sss, rr, cc, idx] += temp[prev_ss, prev_rr, prev_cc, idx]
-                        if c>0:
-                            prev_cc = _mod(cc-1, nc)
-                            for idx in range(5):
-                                temp[sss, rr, cc, idx] -= temp[prev_ss, rr, prev_cc, idx]
-                    if(r>0):
-                        prev_rr = _mod(rr-1, nr)
-                        for idx in range(5):
-                            temp[sss, rr, cc, idx] += temp[sss, prev_rr, cc, idx]
-                        if(c>0):
-                            prev_cc = _mod(cc-1, nc)
-                            for idx in range(5):
-                                temp[sss, rr, cc, idx] -= temp[sss, prev_rr, prev_cc, idx]
-                    if(c>0):
-                        prev_cc = _mod(cc-1, nc)
-                        for idx in range(5):
-                            temp[sss, rr, cc, idx] += temp[sss, rr, prev_cc, idx]
-                    # Add signed corners
-                    if s>=side:
-                        _increment_factors(temp, moving, static, sss, rr, cc, s-side, r, c, -1)
-                        if r>=side:
-                            _increment_factors(temp, moving, static, sss, rr, cc, s-side, r-side, c, 1)
-                            if c>=side:
-                                _increment_factors(temp, moving, static, sss, rr, cc, s-side, r-side, c-side, -1)
-                        if c>=side:
-                            _increment_factors(temp, moving, static, sss, rr, cc, s-side, r, c-side, 1)
-                    if r>=side:
-                        _increment_factors(temp, moving, static, sss, rr, cc, s, r-side, c, -1)
-                        if c>=side:
-                            _increment_factors(temp, moving, static, sss, rr, cc, s, r-side, c-side, 1)
+                            iv[s, r, c, idx] += iv[s-1, r, c, idx]
+        # Compute rectangle integrals using iv
+        for s in range(radius, ns-radius):
+            firsts = _int_max(0, s - radius)
+            lasts = _int_min(ns - 1, s + radius)
+            sides = (lasts - firsts + 1)
+            for r in range(radius, nr-radius):
+                firstr = _int_max(0, r - radius)
+                lastr = _int_min(nr - 1, r + radius)
+                sider = (lastr - firstr + 1)
+                for c in range(radius, nc-radius):
+                    firstc = _int_max(0, c - radius)
+                    lastc = _int_min(nc - 1, c + radius)
+                    sidec = (lastc - firstc + 1)
+                    cnt = sides*sider*sidec
+                    _eval_iv_rectangle(iv, s+radius, r+radius, c+radius, side, iv_eval)
+                    Imean = iv_eval[SI] / cnt
+                    Jmean = iv_eval[SJ] / cnt
+                    Ii = static[s, r, c] - Imean
+                    Ji = moving[s, r, c] - Jmean
+                    sfm = (iv_eval[SIJ] - Jmean * iv_eval[SI] -
+                        Imean * iv_eval[SJ] + cnt * Jmean * Imean)
+                    sff = (iv_eval[SI2] - Imean * iv_eval[SI] -
+                        Imean * iv_eval[SI] + cnt * Imean * Imean)
+                    smm = (iv_eval[SJ2] - Jmean * iv_eval[SJ] -
+                        Jmean * iv_eval[SJ] + cnt * Jmean * Jmean)
 
-                    if c>=side:
-                        _increment_factors(temp, moving, static, sss, rr, cc, s, r, c-side, -1)
-                    # Compute final factors
-                    if ss>=radius and ss<ns-radius and rr>=radius and rr<nr-radius and cc>=radius and cc<nc-radius:
-                        firstc = _int_max(0, cc - radius)
-                        lastc = _int_min(nc - 1, cc + radius)
-                        sidec = (lastc - firstc + 1)
-                        cnt = sides*sider*sidec
-
-                        Imean = temp[sss, rr, cc, SI] / cnt
-                        Jmean = temp[sss, rr, cc, SJ] / cnt
-                        Ii = static[ss, rr, cc] - Imean
-                        Ji = moving[ss, rr, cc] - Jmean
-                        sfm = (temp[sss, rr, cc, SIJ] - Jmean * temp[sss, rr, cc, SI] -
-                            Imean * temp[sss, rr, cc, SJ] + cnt * Jmean * Imean)
-                        sff = (temp[sss, rr, cc, SI2] - Imean * temp[sss, rr, cc, SI] -
-                            Imean * temp[sss, rr, cc, SI] + cnt * Imean * Imean)
-                        smm = (temp[sss, rr, cc, SJ2] - Jmean * temp[sss, rr, cc, SJ] -
-                            Jmean * temp[sss, rr, cc, SJ] + cnt * Jmean * Jmean)
-                        if not (sff == 0.0 or smm == 0.0):
-                            localCorrelation = 0
-                            if(sff * smm > 1e-5):
-                                localCorrelation = sfm * sfm / (sff * smm)
-                            if(localCorrelation < 1):  # avoid bad values...
-                                energy -= localCorrelation
-                            aux = 2.0 * sfm / (sff * smm) * (Ii - sfm / smm * Ji)
-                            out[ss, rr, cc, 0] -= aux * grad_moving[ss, rr, cc, 0]
-                            out[ss, rr, cc, 1] -= aux * grad_moving[ss, rr, cc, 1]
-                            out[ss, rr, cc, 2] -= aux * grad_moving[ss, rr, cc, 2]
-    return out, energy
+                    localCorrelation = _cc_forward_gradient(cnt, Ii, Ji, sfm, sff, smm,
+                                                            grad_static[s, r, c, 0],
+                                                            grad_static[s, r, c, 1],
+                                                            grad_static[s, r, c, 2],
+                                                            grad)
+                    fwd_energy -= localCorrelation
+                    fwd_step[s, r, c, 0] = grad[0]
+                    fwd_step[s, r, c, 1] = grad[1]
+                    fwd_step[s, r, c, 2] = grad[2]
+                    localCorrelation = _cc_backward_gradient(cnt, Ii, Ji, sfm, sff, smm,
+                                                             grad_moving[s, r, c, 0],
+                                                             grad_moving[s, r, c, 1],
+                                                             grad_moving[s, r, c, 2],
+                                                             grad)
+                    bwd_energy -= localCorrelation
+                    bwd_step[s, r, c, 0] = grad[0]
+                    bwd_step[s, r, c, 1] = grad[1]
+                    bwd_step[s, r, c, 2] = grad[2]
+    return fwd_step, bwd_step, fwd_energy, bwd_energy
