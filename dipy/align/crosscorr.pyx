@@ -653,3 +653,75 @@ def compute_cc_backward_step_2d(floating[:, :, :] grad_moving,
                 out[r, c, 0] -= temp * grad_moving[r, c, 0]
                 out[r, c, 1] -= temp * grad_moving[r, c, 1]
     return out, energy
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def compute_wang_pan_backward_step_2d(floating[:, :, :] grad_moving,
+                                      floating[:, :, :] factors,
+                                      cnp.npy_intp radius):
+    r"""Gradient of the CC Metric w.r.t. the backward transformation
+
+    Computes the gradient of the Cross Correlation metric for symmetric
+    registration (SyN) [Avants08] w.r.t. the displacement associated to
+    the static image ('forward' step) as in [Avants11]
+
+    Parameters
+    ----------
+    grad_moving : array, shape (R, C, 2)
+        the gradient of the moving image
+    factors : array, shape (R, C, 5)
+        the precomputed cross correlation terms obtained via
+        precompute_cc_factors_2d
+
+    Returns
+    -------
+    out : array, shape (R, C, 2)
+        the gradient of the cross correlation metric with respect to the
+        displacement associated to the static image
+    energy : the cross correlation energy (data term) at this iteration
+
+    References
+    ----------
+    [Avants08] Avants, B. B., Epstein, C. L., Grossman, M., & Gee, J. C. (2008)
+               Symmetric Diffeomorphic Image Registration with
+               Cross-Correlation: Evaluating Automated Labeling of Elderly and
+               Neurodegenerative Brain, Med Image Anal. 12(1), 26-41.
+    [Avants11] Avants, B. B., Tustison, N., & Song, G. (2011).
+               Advanced Normalization Tools ( ANTS ), 1-35.
+    """
+    ftype = np.asarray(grad_moving).dtype
+    cdef:
+        cnp.npy_intp nr = grad_moving.shape[0]
+        cnp.npy_intp nc = grad_moving.shape[1]
+        cnp.npy_intp r,c
+        double energy = 0
+        double Ii, Ji, sfm, sff, smm, localCorrelation, temp
+        floating[:, :, :] out = np.zeros((nr, nc, 2),
+                                             dtype=ftype)
+
+    with nogil:
+
+        for r in range(radius, nr-radius):
+            for c in range(radius, nc-radius):
+                Ii = factors[r, c, 0]
+                Ji = factors[r, c, 1]
+                sfm = factors[r, c, 2]
+                sff = factors[r, c, 3]
+                smm = factors[r, c, 4]
+                if(sff == 0.0 or smm == 0.0):
+                    continue
+                localCorrelation = 0
+                if(sff * smm > 1e-5):
+                    localCorrelation = sfm * sfm / (sff * smm)
+                if(localCorrelation < 1):  # avoid bad values...
+                    energy += (1.0 - localCorrelation) * smm
+                temp = 2.0 * sfm / (sff * smm) * (Ii - sfm / smm * Ji)
+                out[r, c, 0] -= smm * temp * grad_moving[r, c, 0]
+                out[r, c, 1] -= smm * temp * grad_moving[r, c, 1]
+
+                out[r, c, 0] += 2.0 * (1.0 - localCorrelation) * Ji * grad_moving[r, c, 0]
+                out[r, c, 1] += 2.0 * (1.0 - localCorrelation) * Ji * grad_moving[r, c, 1]
+                #out[r, c, 0] = localCorrelation
+                #out[r, c, 1] = localCorrelation
+    return out, energy
