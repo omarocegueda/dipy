@@ -217,7 +217,7 @@ class ParzenJointHistogram(object):
                                    self.nbins, self.padding, self.joint,
                                    self.smarginal, self.mmarginal)
 
-    def update_pdfs_sparse(self, sval, mval):
+    def update_pdfs_sparse(self, sval, mval, inside):
         r''' Computes the Probability Density Functions from a set of samples
 
         The list of intensities `sval` and `mval` are assumed to be sampled
@@ -237,13 +237,17 @@ class ParzenJointHistogram(object):
             sampled intensities from the static image at sampled_points
         mval : array, shape (n,)
             sampled intensities from the moving image at sampled_points
+        inside : array, shape (n,)
+            if `inside[i]` is zero, then the i-th sample is discarded.
+            If None, then no samples are discarded (equivalent
+            to passing an array with all elements equal to 1).
         '''
         if not self.setup_called:
             self.setup(sval, mval)
 
-        energy = _compute_pdfs_sparse(sval, mval, self.smin, self.sdelta,
-                                      self.mmin, self.mdelta, self.nbins,
-                                      self.padding, self.joint,
+        energy = _compute_pdfs_sparse(sval, mval, inside, self.smin,
+                                      self.sdelta, self.mmin, self.mdelta,
+                                      self.nbins, self.padding, self.joint,
                                       self.smarginal, self.mmarginal)
 
     def update_gradient_dense(self, theta, transform, static, moving,
@@ -337,7 +341,7 @@ class ParzenJointHistogram(object):
             else:
                 raise ValueError('Grad. field dtype must be floating point')
 
-    def update_gradient_sparse(self, theta, transform, sval, mval,
+    def update_gradient_sparse(self, theta, transform, sval, mval, inside,
                                sample_points, mgradient):
         r''' Computes the Gradient of the joint PDF w.r.t. transform parameters
 
@@ -364,6 +368,10 @@ class ParzenJointHistogram(object):
             sampled intensities from the static image at sampled_points
         mval : array, shape (m,)
             sampled intensities from the moving image at sampled_points
+        inside : array, shape (n,)
+            if `inside[i]` is zero, then the i-th sample is discarded.
+            If None, then no samples are discarded (equivalent
+            to passing an array with all elements equal to 1).
         sample_points : array, shape (m, 3)
             coordinates (in physical space) of the points the images were
             sampled at
@@ -391,12 +399,12 @@ class ParzenJointHistogram(object):
         if dim == 2:
             if mgradient.dtype == np.float64:
                 _joint_pdf_gradient_sparse_2d[cython.double](theta, transform,
-                    sval, mval, sample_points, mgradient, self.smin,
+                    sval, mval, inside, sample_points, mgradient, self.smin,
                     self.sdelta, self.mmin, self.mdelta, self.nbins,
                     self.padding, self.joint_grad)
             elif mgradient.dtype == np.float32:
                 _joint_pdf_gradient_sparse_2d[cython.float](theta, transform,
-                    sval, mval, sample_points, mgradient, self.smin,
+                    sval, mval, inside, sample_points, mgradient, self.smin,
                     self.sdelta, self.mmin, self.mdelta, self.nbins,
                     self.padding, self.joint_grad)
             else:
@@ -405,12 +413,12 @@ class ParzenJointHistogram(object):
         elif dim == 3:
             if mgradient.dtype == np.float64:
                 _joint_pdf_gradient_sparse_3d[cython.double](theta, transform,
-                    sval, mval, sample_points, mgradient, self.smin,
+                    sval, mval, inside, sample_points, mgradient, self.smin,
                     self.sdelta, self.mmin, self.mdelta, self.nbins,
                     self.padding, self.joint_grad)
             elif mgradient.dtype == np.float32:
                 _joint_pdf_gradient_sparse_3d[cython.float](theta, transform,
-                    sval, mval, sample_points, mgradient, self.smin,
+                    sval, mval, inside, sample_points, mgradient, self.smin,
                     self.sdelta, self.mmin, self.mdelta, self.nbins,
                     self.padding, self.joint_grad)
             else:
@@ -750,10 +758,11 @@ cdef _compute_pdfs_dense_3d(double[:, :, :] static, double[:, :, :] moving,
                     mmarginal[j] += joint[i, j]
 
 
-cdef _compute_pdfs_sparse(double[:] sval, double[:] mval, double smin,
-                          double sdelta, double mmin, double mdelta,
-                          int nbins, int padding, double[:, :] joint,
-                          double[:] smarginal, double[:] mmarginal):
+cdef _compute_pdfs_sparse(double[:] sval, double[:] mval, int[:] inside,
+                          double smin, double sdelta, double mmin,
+                          double mdelta, int nbins, int padding,
+                          double[:, :] joint, double[:] smarginal,
+                          double[:] mmarginal):
     r''' Probability Density Functions of paired intensities
 
     Parameters
@@ -762,6 +771,10 @@ cdef _compute_pdfs_sparse(double[:] sval, double[:] mval, double smin,
         sampled intensities from the static image at sampled_points
     mval : array, shape (n,)
         sampled intensities from the moving image at sampled_points
+    inside : array, shape (n,)
+        if `inside[i]` is zero, then the i-th sample is discarded.
+        If None, then no samples are discarded (equivalent
+        to passing an array with all elements equal to 1).
     smin : float
         the minimum observed intensity associated with the static image, which
         was used to define the joint PDF
@@ -798,6 +811,8 @@ cdef _compute_pdfs_sparse(double[:] sval, double[:] mval, double smin,
         valid_points = 0
         smarginal[:] = 0
         for i in range(n):
+            if inside is not None and inside[i]==0:
+                continue
             valid_points += 1
             rn = _bin_normalize(sval[i], smin, sdelta)
             r = _bin_index(rn, nbins, padding)
@@ -1047,7 +1062,7 @@ cdef _joint_pdf_gradient_dense_3d(double[:] theta, Transform transform,
 
 
 cdef _joint_pdf_gradient_sparse_2d(double[:] theta, Transform transform,
-                                   double[:] sval, double[:] mval,
+                                   double[:] sval, double[:] mval, int[:] inside,
                                    double[:, :] sample_points,
                                    floating[:, :] mgradient, double smin,
                                    double sdelta, double mmin,
@@ -1070,6 +1085,10 @@ cdef _joint_pdf_gradient_sparse_2d(double[:] theta, Transform transform,
         sampled intensities from the static image at sampled_points
     mval : array, shape (m,)
         sampled intensities from the moving image at sampled_points
+    inside : array, shape (m,)
+        if `inside[i]` is zero, then the i-th sample is discarded.
+        If None, then no samples are discarded (equivalent
+        to passing an array with all elements equal to 1).
     sample_points : array, shape (m, 2)
         positions (in physical space) of the points the images were sampled at
     mgradient : array, shape (m, 2)
@@ -1107,6 +1126,8 @@ cdef _joint_pdf_gradient_sparse_2d(double[:] theta, Transform transform,
     with nogil:
         valid_points = 0
         for i in range(m):
+            if inside is not None and inside[i]==0:
+                continue
             valid_points += 1
             if constant_jacobian == 0:
                 constant_jacobian = transform._jacobian(theta,
@@ -1137,7 +1158,7 @@ cdef _joint_pdf_gradient_sparse_2d(double[:] theta, Transform transform,
 
 
 cdef _joint_pdf_gradient_sparse_3d(double[:] theta, Transform transform,
-                                   double[:] sval, double[:] mval,
+                                   double[:] sval, double[:] mval, int[:] inside,
                                    double[:, :] sample_points,
                                    floating[:, :] mgradient, double smin,
                                    double sdelta, double mmin,
@@ -1160,6 +1181,10 @@ cdef _joint_pdf_gradient_sparse_3d(double[:] theta, Transform transform,
         sampled intensities from the static image at sampled_points
     mval : array, shape (m,)
         sampled intensities from the moving image at sampled_points
+    inside : array, shape (m,)
+        if `inside[i]` is zero, then the i-th sample is discarded.
+        If None, then no samples are discarded (equivalent
+        to passing an array with all elements equal to 1).
     sample_points : array, shape (m, 3)
         positions (in physical space) of the points the images were sampled at
     mgradient : array, shape (m, 3)
@@ -1197,6 +1222,8 @@ cdef _joint_pdf_gradient_sparse_3d(double[:] theta, Transform transform,
     with nogil:
         valid_points = 0
         for i in range(m):
+            if inside is not None and inside[i]==0:
+                continue
             valid_points += 1
 
             if constant_jacobian == 0:

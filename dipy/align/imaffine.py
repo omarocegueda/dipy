@@ -515,6 +515,7 @@ class MutualInformationMetric(object):
         """
         static_values = None
         moving_values = None
+        inside = None
         if self.sampling_proportion is None:  # Dense case
             static_values = self.static
             moving_values = self.affine_map.transform(self.moving)
@@ -524,11 +525,13 @@ class MutualInformationMetric(object):
             pts = sp_to_moving.dot(self.samples.T).T  # Points on moving grid
             pts = pts[..., :self.dim]
             self.moving_vals, inside = self.interp_method(self.moving, pts)
+            #JOOG: check `inside` array
+            #print('inside: %d / %d'%(np.sum(inside), inside.shape[0]))
             self.moving_vals = np.array(self.moving_vals)
             static_values = self.static_vals
             moving_values = self.moving_vals
-            self.histogram.update_pdfs_sparse(static_values, moving_values)
-        return static_values, moving_values
+            self.histogram.update_pdfs_sparse(static_values, moving_values, inside)
+        return static_values, moving_values, inside
 
     def _update_mutual_information(self, params, update_gradient=True):
         r""" Updates marginal and joint distributions and the joint gradient
@@ -561,7 +564,7 @@ class MutualInformationMetric(object):
         self.affine_map.set_affine(current_affine)
 
         # Update the histogram with the current joint intensities
-        static_values, moving_values = self._update_histogram()
+        static_values, moving_values, inside = self._update_histogram()
 
         H = self.histogram  # Shortcut to `self.histogram`
         grad = None  # Buffer to write the MI gradient into (if needed)
@@ -592,7 +595,7 @@ class MutualInformationMetric(object):
                 # The Jacobian must be evaluated at the pre-aligned points
                 pts = self.samples_prealigned[..., :self.dim]
                 H.update_gradient_sparse(params, self.transform, static_values,
-                                         moving_values, pts, mgrad)
+                                         moving_values, inside, pts, mgrad)
 
         # Call the cythonized MI computation with self.histogram fields
         self.metric_val = compute_parzen_mi(H.joint, H.joint_grad,
@@ -622,7 +625,7 @@ class MutualInformationMetric(object):
         try:
             self._update_mutual_information(params, False)
         except AffineInversionError:
-            return np.inf
+            return np.inf            
         return -1 * self.metric_val
 
     def gradient(self, params):
@@ -669,6 +672,11 @@ class MutualInformationMetric(object):
             self._update_mutual_information(params, True)
         except AffineInversionError:
             return np.inf, 0 * self.metric_grad
+        # JOOG
+        #if self.verbosity==VerbosityLevels.DEBUG:
+        #    print("Metric: %e"%(-1 * self.metric_val,))
+        #else:
+        #    print("Verbosity: ", self.verbosity)
         return -1 * self.metric_val, -1 * self.metric_grad
 
 
