@@ -1383,6 +1383,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         self.static_to_ref = self.moving_to_ref.warp_endomorphism(
             self.static_to_ref.inverse()).inverse()
 
+        self.static_to_ref.forward = np.array(self.static_to_ref.forward)
+        self.static_to_ref.backward = np.array(self.static_to_ref.backward)
         # Report mean and std for the composed deformation field
         residual, stats = self.static_to_ref.compute_inversion_error()
         if self.verbosity >= VerbosityLevels.DIAGNOSE:
