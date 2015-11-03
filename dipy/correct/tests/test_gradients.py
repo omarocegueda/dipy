@@ -20,8 +20,98 @@ import scipy.sparse
 import scipy.sparse.linalg
 import dipy.correct.gradients as gr
 import dipy.correct.splines as splines
-
 import dipy.viz.regtools as rt
+from dipy.align.imaffine import MutualInformationMetric, AffineRegistration
+from dipy.align.transforms import regtransforms
+from experiments.registration.regviz import overlay_slices
+import mayavi
+import mayavi.mlab as mlab
+from tvtk.tools import visual
+from tvtk.api import tvtk
+from inverse.dfinverse_3d import warp_points_3d, compute_jacobian_3d
+
+def draw_deformed_grid(field, zlist=None, npoints=75, tube_radius=0.05, x0=None, x1=None, y0=None, y1=None):
+    if x0 is None:
+        x0 = 0
+    if y0 is None:
+        y0 = 0
+    if x1 is None:
+        x1 = field.shape[0]-1
+    if y1 is None:
+        y1 = field.shape[1]-1
+    if zlist is None:
+        zlist = [field.shape[1]//2]
+    x = np.linspace(x0, x1, npoints)
+    y = np.linspace(y0, y1, npoints)
+
+    mlab.figure(bgcolor=(1,1,1))
+    for z0 in zlist:
+        hlines = []
+        for i in range(npoints):
+            hline = [(x[i], y[j], z0) for j in range(npoints)]
+            hlines.append(np.array(hline))
+        vlines = []
+        for i in range(npoints):
+            vline = [(x[j], y[i], z0) for j in range(npoints)]
+            vlines.append(np.array(vline))
+
+        for line  in hlines:
+            warped = np.array(warp_points_3d(line, field))
+            mlab.plot3d(warped[:,0], warped[:,1], warped[:,2], color=(0,0,0), tube_radius=tube_radius)
+        for line  in vlines:
+            warped = np.array(warp_points_3d(line, field))
+            mlab.plot3d(warped[:,0], warped[:,1], warped[:,2], color=(0,0,0), tube_radius=tube_radius)
+
+def dipy_align(static, static_grid2world, moving, moving_grid2world):
+    r''' Full rigid registration with Dipy's imaffine module
+    
+    Here we implement an extra optimization heuristic: move the geometric
+    centers of the images to the origin. Imaffine does not do this by default
+    because we want to give the user as much control of the optimization
+    process as possible.
+
+    '''
+    # Bring the center of the moving image to the origin
+    c_moving = tuple(0.5 * np.array(moving.shape, dtype=np.float64))
+    c_moving = moving_grid2world.dot(c_moving+(1,))
+    correction_moving = np.eye(4, dtype=np.float64)
+    correction_moving[:3,3] = -1 * c_moving[:3]
+    centered_moving_aff = correction_moving.dot(moving_grid2world)
+
+    # Bring the center of the static image to the origin
+    c_static = tuple(0.5 * np.array(static.shape, dtype=np.float64))
+    c_static = static_grid2world.dot(c_static+(1,))
+    correction_static = np.eye(4, dtype=np.float64)
+    correction_static[:3,3] = -1 * c_static[:3]
+    centered_static_aff = correction_static.dot(static_grid2world)
+    
+    dim = len(static.shape)
+    metric = MutualInformationMetric(nbins=32, sampling_proportion=0.3)
+    level_iters = [10000, 1000, 100]
+    affr = AffineRegistration(metric=metric, level_iters=level_iters)
+    affr.verbosity = VerbosityLevels.DEBUG
+    #metric.verbosity = VerbosityLevels.DEBUG
+    
+    # Registration schedule: center-of-mass then translation, then rigid and then affine
+    prealign = 'mass'
+    transforms = ['TRANSLATION', 'RIGID', 'AFFINE']
+    
+    sol = np.eye(dim + 1)
+    for transform_name in transforms:
+        transform = regtransforms[(transform_name, dim)]
+        print('Optimizing: %s'%(transform_name,))
+        x0 = None
+        sol = affr.optimize(static, moving, transform, x0,
+                              centered_static_aff, centered_moving_aff, starting_affine = prealign)
+        prealign = sol.affine.copy()
+
+    # Now bring the geometric centers back to their original location
+    fixed = np.linalg.inv(correction_moving).dot(sol.affine.dot(correction_static))
+    sol.set_affine(fixed)
+    sol.domain_grid2world = static_grid2world
+    sol.codomain_grid2world = moving_grid2world
+    
+    return sol
 
 def get_diag_affine(sp):
     A = np.eye(4)
@@ -66,7 +156,154 @@ def get_preprocessed_data(levels, use_extend_volume = True):
     return up_ss, down_ss, up_affine, up_affine_inv, down_affine, down_affine_inv
 
 
+def test_hcp():
+    #
+    from experiments.registration.images2gif import *
+    from experiments.registration.regviz import overlay_slices
+    from dipy.align.imaffine import AffineMap
+    from dipy.correct.gradients import warp_with_orfield
+    from dipy.align.vector_fields import compute_jacobian_3d, warp_3d
+    from inverse.inverse_3d import invert_vf_full_box_3d
+    from dipy.align.imwarp import SymmetricDiffeomorphicRegistration
+    from dipy.align.metrics import CCMetric
+    import os
+    import pickle
+    import experiments.registration.dataset_info as info
+    import dipy.data as dpd
+    
+    
+    use_preproc = True
+    if use_preproc:
+        data_dir = 'D:/opt/registration/data/HCP/mgh_1010/diff/preproc/mri/'
+    else:
+        data_dir = 'D:/opt/registration/data/HCP/mgh_1010/diff/raw/mri/'
+        
+    # Names
+    t1_name = 'D:/opt/registration/data/HCP/mgh_1010/anat/T1/T1.nii.gz'
+    t1seg_name = 'D:/opt/registration/data/topup_example/T1seg.nii.gz'
+    t1seg_mask_name = 'T1seg_mask.nii.gz'
+    t2_name = 'D:/opt/registration/data/HCP/mgh_1010/anat/T2/T2.nii.gz'
+    b0_name = 'b_0.nii.gz'
+    b0_strip_name = 'D:/opt/registration/data/HCP/mgh_1010/diff/raw/mri/b0_strip.nii.gz'
+    b0_brain_mask_name = 'D:/opt/registration/data/HCP/mgh_1010/diff/raw/mri/b0_strip_mask.nii.gz'
+    
+    
+    # Load data
+    b0_strip_nib = nib.load(b0_strip_name)
+    b0_strip = b0_strip_nib.get_data().squeeze()
+    b0_brain_mask_nib = nib.load(b0_brain_mask_name)
+    b0_brain_mask = b0_brain_mask_nib.get_data().squeeze()
+    b0_nib = nib.load(data_dir + b0_name)
+    b0_affine = b0_nib.get_affine()
+    b0_full = b0_nib.get_data().squeeze().astype(np.float64)
+    b0 = np.mean(b0_full,3)
+    t1_nib = nib.load(t1_name)
+    t1 = t1_nib.get_data().squeeze()
+    t1_affine = t1_nib.get_affine()
+    t1seg_nib = nib.load(t1seg_name)
+    t1_seg = t1seg_nib.get_data().squeeze()
+    t1seg_mask_nib = nib.load(t1seg_mask_name)
+    t1seg_mask = t1seg_nib.get_data().squeeze()
+    t2_nib = nib.load(t2_name)
+    t2 = t2_nib.get_data().squeeze()
+    t2_affine = t2_nib.get_affine()
+    
+    # Resampling
+    b0_towards_t1_affinemap = AffineMap(None, t1.shape, t1_affine, b0.shape, b0_affine)
+    
+    t1_t2_affinemap = AffineMap(None, t1.shape, t1_affine, t2.shape, t2_affine)
+    t2_resampled_t1 = t1_t2_affinemap.transform(t2)
+    t1_resampled_t2 = t1_t2_affinemap.transform_inverse(t1)
+    #create_dwi_gif('b0s.gif', b0_full, axis=2, duration=0.1)
+    #Register brainweb template to T1 for brain extraction
+    metric = CCMetric(3)
+    level_iters = [100, 100, 10]
+    sdr = SymmetricDiffeomorphicRegistration(metric, level_iters)
+    diffmap_name = 'bwt1_towards_t1_diffmap.p'
+    if os.path.isfile(diffmap_name):
+        bwt1_towards_t1_diffmap = pickle.load(open(diffmap_name,'r'))
+    else:
+        MNI_T2 = dpd.read_mni_template()
+        MNI_T2_data = MNI_T2.get_data()
+        MNI_T2_affine = MNI_T2.get_affine()
+        
+        
+        bwt1_name = info.get_brainweb('t1','strip')
+        bwt1_nib = nib.load(bwt1_name)
+        bwt1 = bwt1_nib.get_data().squeeze()
+        bwt1_affine = bwt1_nib.get_affine()
+        affmap_bwt1_towards_t1 = dipy_align(t1, t1_affine, bwt1, bwt1_affine)
+        bwt1_aligned_t1 = affmap_bwt1_towards_t1.transform(bwt1)
+        
+        affmap = bwt1_t1 = AffineMap(None, bwt1.shape, bwt1_affine, t1.shape, t1_affine)
+        t1_resampled_bwt1 = affmap.transform(t1)
+        
+        bwt1_towards_t1_diffmap = sdr.optimize(t2, b0_strip, t2_affine, b0_affine)
+        b0_towards_t2_diffmap.forward = np.array(b0_towards_t2_diffmap.forward)
+        b0_towards_t2_diffmap.backward = np.array(b0_towards_t2_diffmap.backward)
+        pickle.dump(b0_towards_t2_diffmap, open(diffmap_name,'w'))
+        
+    t2_brain_mask = b0_towards_t2_diffmap.transform(b0_brain_mask, 'nearest')
+    b0_warped_t2 = b0_towards_t2_diffmap.transform(b0, 'nearest')
+    t2_strip = t2*t2_brain_mask
+    
+    # The T1 and T2 are aligned, we can use the same transform to get the T1 mask
+    t1_brain_mask = b0_towards_t2_diffmap.transform(b0_brain_mask, 'nearest', out_shape=t1.shape, out_grid2world=t1_affine)
+    b0_warped_t1 = b0_towards_t2_diffmap.transform(b0, out_shape=t1.shape, out_grid2world=t1_affine)
+    t1_strip = t1*t1_brain_mask
+    
+    
+    b0_t1_affinemap = AffineMap(None, b0.shape, b0_affine, t1.shape, t1_affine)
+    t1_resampled_b0 = b0_t1_affinemap.transform(t1)
+    overlay_slices(b0, t1_resampled_b0, slice_type=0)
+    b0_resampled_t1 = b0_t1_affinemap.transform_inverse(b0)
+    overlay_slices(b0_resampled_t1, t1, slice_type=0)
 
+    b0_t2_affinemap = AffineMap(None, b0.shape, b0_affine, t2.shape, t2_affine)
+    t2_resampled_b0 = b0_t2_affinemap.transform(t2)
+    overlay_slices(b0, t2_resampled_b0, slice_type=0)
+    b0_resampled_t2 = b0_t2_affinemap.transform_inverse(b0)
+    overlay_slices(b0_resampled_t2, t2, slice_type=0)
+    
+    
+    #create simple field
+    sigma = 10
+    max_d = 10
+    pe_dir = np.array([0,-1,0], dtype=np.float64)   
+    
+    field = np.zeros(b0.shape)
+    X, Y, Z, = np.meshgrid(range(field.shape[0]), range(field.shape[1]), range(field.shape[2]))
+    X = X.astype(np.float64)
+    Y = Y.astype(np.float64)
+    Z = Z.astype(np.float64)
+    x0 = 0
+    y0 = Y.shape[1]//2 
+    z0 = Z.shape[2]//2
+    field = np.exp(-1*((X-x0)**2 + (Y-y0)**2 + (Z-z0)**2)/(2*sigma**2))
+    field/=field.max()
+    field *= max_d
+    dfield = np.zeros(field.shape+(3,))
+    dfield[...,1] = pe_dir[1]*field
+    
+    inv_field = invert_vf_full_box_3d(dfield)   
+    inv_field = np.array(inv_field)
+    #deform B0
+    deformed = warp_3d(b0, inv_field)
+    jacobian = compute_jacobian_3d(inv_field)
+    jacobian = np.array(jacobian)
+    
+    #Jacobian modulation
+    def_mod = deformed*jacobian
+    
+    overlay_slices(deformed, def_mod, slice_type=2)
+    
+
+    
+    
+    
+    
+    
+    
 
 def topup():
     from dipy.correct.splines import CubicSplineField
@@ -85,7 +322,8 @@ def topup():
     lambda1 = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2])*2
     lambda2 = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e1, 1])
     #lambda2 = np.array([10, 200, 5, 5, 5, 5, 5, 5e-1, 5e-1, 5e-1])
-    max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 10, 10], dtype=np.int32)
+    #max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 10, 10], dtype=np.int32)
+    max_iter = np.array([30, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.int32)
     #max_iter = np.array([5, 5, 5, 5, 5, 10, 10, 20, 20], dtype=np.int32)
     #max_iter = np.array([10, 10, 10, 10, 10, 10, 10, 20, 20], dtype=np.int32)
 
@@ -108,7 +346,7 @@ def topup():
     up_nz = up[sphere>0]
     dn_nz = down[sphere>0]
 
-    try_new_scaling = True
+    try_new_scaling = False
     if try_new_scaling:
         mup = up_nz.mean()
         sup = mup - up.min()
@@ -195,9 +433,9 @@ def topup():
             new_field = CubicSplineField(sub_up.shape, kspacing)
             resample_affine = subsampling[stage] * np.eye(4) / subsampling[stage-1]
             resample_affine[3,3] = 1
-            new_b = vfu.warp_3d_affine(b.astype(floating),
-                                       np.array(sub_up.shape, dtype=np.int32),
-                                       resample_affine)
+            new_b = vfu.transform_3d_affine(b.astype(floating),
+                                            np.array(sub_up.shape, dtype=np.int32),
+                                            resample_affine)
 
             new_b = np.array(new_b, dtype=np.float64)
             # Scale to new voxel size

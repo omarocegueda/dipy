@@ -1418,6 +1418,10 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
                   % (stats[1], stats[2]))
 
         if self.return_partial:
+            self.static_to_ref.forward = np.array(self.static_to_ref.forward)
+            self.static_to_ref.backward = np.array(self.static_to_ref.backward)
+            self.moving_to_ref.forward = np.array(self.moving_to_ref.forward)
+            self.moving_to_ref.backward = np.array(self.moving_to_ref.backward)
             return self.static_to_ref, self.moving_to_ref
 
         # Compose the two partial transformations
@@ -1430,6 +1434,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             print('Final residual error: %0.6f (%0.6f)' % (stats[1], stats[2]))
         if self.callback is not None:
             self.callback(self, RegistrationStages.OPT_END)
+        self.static_to_ref.forward = np.array(self.static_to_ref.forward)
+        self.static_to_ref.backward = np.array(self.static_to_ref.backward)
         return self.static_to_ref
 
     def optimize(self, static, moving, static_grid2world=None,

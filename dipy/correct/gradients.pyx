@@ -234,7 +234,7 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                             k, i, j, 1, affine_idx_in)
                         dj = _apply_affine_3d_x2(
                             k, i, j, 1, affine_idx_in)
-                        inside = interpolate_scalar_trilinear(b, dk, di, dj, &tmp)
+                        inside = interpolate_scalar_trilinear[floating](b, dk, di, dj, &tmp)
                         dkk = dir[0] * tmp
                         dii = dir[1] * tmp
                         djj = dir[2] * tmp
@@ -263,7 +263,7 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                         dii = di + i
                         djj = dj + j
 
-                    mask[k,i,j] = interpolate_scalar_trilinear(f, dkk, dii, djj,
+                    mask[k,i,j] = interpolate_scalar_trilinear[floating](f, dkk, dii, djj,
                                                           &warped[k,i,j])
     return warped, mask
 
