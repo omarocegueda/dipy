@@ -110,6 +110,7 @@ for modulename, other_sources, language in (
     ('dipy.align.transforms', [], 'c'),
     ('dipy.align.parzenhist', [], 'c'),
     ('dipy.correct.gradients', [], 'c'),
+    ('dipy.correct.cc_splines', [], 'c'),
     ('dipy.correct.splines', [], 'c')):
 
     pyx_src = pjoin(*modulename.split('.')) + '.pyx'
