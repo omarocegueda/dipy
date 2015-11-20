@@ -180,9 +180,9 @@ def test_cc_splines():
         dfield = field.get_volume((0,1,0))
         dfield = np.array(dfield).astype(np.float64)
         
-        pedir_factor = 1.0
+        pedir_factor = -1.0
         kcoef_grad = np.zeros_like(field.coef)
-        cc_splines_gradient(current_up, current_down,
+        energy = cc_splines_gradient(current_up, current_down,
                         dcurrent_up, dcurrent_down,
                         pedir_factor,
                         None, None,
@@ -190,5 +190,7 @@ def test_cc_splines():
                         dfield, field.kspacing,
                         field.grid_shape, radius,
                         kcoef_grad)
+
+        field.copy_coefficients(kcoef_grad)
     
     
