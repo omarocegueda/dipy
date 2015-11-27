@@ -29,6 +29,7 @@ import mayavi.mlab as mlab
 from tvtk.tools import visual
 from tvtk.api import tvtk
 from inverse.dfinverse_3d import warp_points_3d, compute_jacobian_3d
+from dipy.correct.splines import CubicSplineField
 
 def draw_deformed_grid(field, zlist=None, npoints=75, tube_radius=0.05, x0=None, x1=None, y0=None, y1=None):
     if x0 is None:
@@ -306,10 +307,9 @@ def test_hcp():
     
 
 def topup():
-    from dipy.correct.splines import CubicSplineField
     # Prameters
     #data_dir = 'D:/opt/registration/data/topup_example/'
-    data_dir = './'
+    data_dir = '/home/omar/data/topup_example/'
     up_fname = data_dir + "b0_blipup.nii"
     down_fname = data_dir + "b0_blipdown.nii"
     d_up = np.array([0, 1, 0], dtype=np.float64)

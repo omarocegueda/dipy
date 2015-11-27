@@ -806,6 +806,71 @@ cdef class Spline3D:
                     indptr[row] = cnt
 
 
+    cdef void _get_bending_gradient(self, double[:,:,:] coef,
+                                    double[:] vox_size, double[:] grad):
+        cdef:
+            int nnx = self.sx._num_overlapping()
+            int nny = self.sy._num_overlapping()
+            int nnz = self.sz._num_overlapping()
+            int nx, ny, nz
+            int cx = nnx // 2
+            int cy = nny // 2
+            int cz = nnz // 2
+
+            int ddir1, ddir2
+            int *der = [0, 0, 0]
+            double[:] prods = np.ndarray(nnx*nny*nnz, dtype=np.float64)
+
+            int ncx = coef.shape[0]
+            int ncy = coef.shape[1]
+            int ncz = coef.shape[2]
+            int i, j, k, ii, jj, kk, cnt
+            int row, col
+            double mult # twice the multiplicity of the cross derivatives
+            double sz_norm # normalization factor to compensate for voxel size
+
+        with nogil:
+            grad[:] = 0
+            for ddir1 in range(3):
+                for ddir2 in range(ddir1, 3):
+                    der[0] = 0
+                    der[1] = 0
+                    der[2] = 0
+                    der[ddir1] += 1
+                    der[ddir2] += 1
+                    self._get_all_autocorrelations(der[0], der[1], der[2], prods)
+                    sz_norm = 1.0 / (vox_size[ddir1] * vox_size[ddir2])
+                    sz_norm *= sz_norm
+                    if ddir1 == ddir2:
+                        mult = 2.0
+                    else:
+                        mult = 4.0
+
+                    # Accumulate this second order derivative
+                    # Iterate over all coefficients
+                    row = 0
+                    for i in range(ncx):
+                        for j in range(ncy):
+                            for k in range(ncz):
+                                # Look for all overlapping (neighboring) splines
+                                for ii in range(i - cx, i + cx + 1):
+                                    if ii < 0 or ii >= ncx:
+                                        continue
+                                    for jj in range(j - cy, j + cy + 1):
+                                        if jj < 0 or jj >= ncy:
+                                            continue
+                                        for kk in range(k - cz, k + cz + 1):
+                                            if kk < 0 or kk >= ncz:
+                                                continue
+                                            col = ii * ncy*ncz + jj * ncz + kk
+                                            idx = (ii - i + cx)*nny*nnz +\
+                                                  (jj - j + cy)*nnz +\
+                                                  (kk - k + cz)
+                                            grad[row] += mult * sz_norm * coef[ii,jj,kk] * prods[idx]
+                                row += 1
+
+
+
     def get_bending_system(self, double[:,:,:] coef, double[:] vox_size):
         cdef:
             double[:] grad = np.zeros(coef.size)
@@ -826,6 +891,17 @@ cdef class Spline3D:
 
         #hessian = sp.sparse.csr_matrix((data, indices, indptr), shape=(ncoef, ncoef))
         return grad, data, indices, indptr
+
+
+    def get_bending_gradient(self, double[:,:,:] coef, double[:] vox_size):
+        cdef:
+            double[:] grad = np.empty(coef.size)
+            int ncoef = coef.shape[0] * coef.shape[1] * coef.shape[2]
+            int n_overlaps = self.sx._num_overlapping() *\
+                             self.sy._num_overlapping() *\
+                             self.sz._num_overlapping()
+        self._get_bending_gradient(coef, vox_size, grad)
+        return grad
 
 
     def __dealloc__(self):
