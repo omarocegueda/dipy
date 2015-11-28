@@ -119,7 +119,7 @@ class OppositeBlips_CC(EPIDistortionModel):
         self.pedir_up = np.array((0, 1.0, 0))
         self.pedir_down = np.array((0, -1.0, 0))
 
-    def get_gradient(self, up, down, field):
+    def energy_and_gradient(self, up, down, field):
         current_shape = np.array(up.shape, dtype=np.int32)
         b  = np.array(field.get_volume((0,0,0)))
         db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
@@ -148,10 +148,11 @@ class OppositeBlips_CC(EPIDistortionModel):
         dw_up = np.array(dw_up)
         dw_down = np.array(dw_down)
 
-        cc_splines_gradient_epicor(up, down, dup, ddown, 1.0, None, None,
-                                   kernel, dkernel, db, kspacing,
-                                   field_shape, self.radius, kcoef_grad)
-        return kcoef_grad
+        energy = cc_splines_gradient_epicor(up, down, dup, ddown, 1.0,
+                                            None, None, kernel, dkernel,
+                                            db, kspacing, field_shape,
+                                            self.radius, kcoef_grad)
+        return -1 * energy, -1 * kcoef_grad
 
 
 class SingleEPI_CC(EPIDistortionModel):
@@ -161,7 +162,7 @@ class SingleEPI_CC(EPIDistortionModel):
         """
         self.radius = radius
 
-    def get_gradient(self, up, down, field):
+    def energy_and_gradient(self, up, down, field):
         return None
 
 
@@ -172,7 +173,7 @@ class SingleEPI_ECC(EPIDistortionModel):
         """
         self.radius = radius
 
-    def get_gradient(self, up, down, field):
+    def energy_and_gradient(self, up, down, field):
         return None
 
 
@@ -215,6 +216,7 @@ class OffResonanceFieldEstimator(object):
             to
             [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.005, 0.0005]
         """
+        self.distortion_model = distortion_model
         if level_iters is None:
             level_iters = [200, 100, 50, 25, 12, 10, 10, 5, 5]
         if subsampling is None:
@@ -224,9 +226,10 @@ class OffResonanceFieldEstimator(object):
         if fwhm is None:
             fwhm = [8, 6, 4, 3, 3, 2, 1, 0, 0]
         if lambdas is None:
-            lambdas = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05,
+            lambdas = [0.05, 0.05, 0.05, 0.05, 0.05,
                        0.05, 0.05, 0.005, 0.0005]
-        self._set_multires_params(level_iters, subsampling, warp_res, fwhm)
+        self._set_multires_params(level_iters, subsampling, warp_res,
+                                  fwhm, lambdas)
 
     def _set_nstages_from_sequence(self, seq):
         r""" Sets the number of stages of the multiresolution strategy
@@ -294,8 +297,97 @@ class OffResonanceFieldEstimator(object):
             self.lambdas = np.copy(lambdas)
         self._set_nstages_from_sequence(self.lambdas)
 
-    def optimize(self, f1, f2):
-        pass
+    def optimize(self, f1, f2, spacings):
+        r""" Start off-resonance field estimation
+        """
+        field = None
+        b = None
+        b_coeff = None
+        step_length = 0.3
+        for stage in range(self.nstages):
+            print("Stage: %d / %d"%(stage + 1, self.nstages))
+            if self.subsampling[stage] > 1:
+                sub1 = vfu.downsample_scalar_field_3d(f1)
+                sub2 = vfu.downsample_scalar_field_3d(f2)
+            else:
+                sub1 = f1
+                sub2 = f2
+
+            resampled_sp = self.subsampling[stage] * spacings
+            tps_lambda = self.lambdas[stage]
+
+            # get the spline resolution from millimeters to voxels
+            kspacing = np.round(self.warp_res[stage]/resampled_sp)
+            kspacing = kspacing.astype(np.int32)
+            kspacing[kspacing < 1] = 1
+
+            # Scale space smoothing sigma
+            sigma_mm = self.fwhm[stage] / (np.sqrt(8.0 * np.log(2)))
+            sigma_vox = sigma_mm/resampled_sp
+            print("kspacing:",kspacing)
+            print("sigma_vox:",sigma_vox)
+
+            # Create, rescale or keep field as needed
+            if field is None:
+                # The field has not been created, this must be the first stage
+                print ("Creating field")
+                field = CubicSplineField(sub1.shape, kspacing)
+                b_coeff = np.zeros(field.num_coefficients())
+                field.copy_coefficients(b_coeff)
+            elif (not np.all(sub1.shape == field.vol_shape) or
+                  not np.all(kspacing == field.kspacing)):
+                print ("Resampling field")
+                # We need to reshape the field
+                new_field = CubicSplineField(sub1.shape, kspacing)
+                resample_affine = (self.subsampling[stage] * np.eye(4) /
+                                   self.subsampling[stage-1])
+                resample_affine[3,3] = 1.0
+                new_b = vfu.transform_3d_affine(b.astype(np.float64),
+                                                np.array(sub1.shape, dtype=np.int32),
+                                                resample_affine)
+                new_b = np.array(new_b, dtype=np.float64)
+                # Scale to new voxel size
+                new_b *= ((1.0 * self.subsampling[stage-1]) /
+                          self.subsampling[stage])
+                # Compute the coefficients associated with the resampled field
+                coef = new_field.spline3d.fit_to_data(new_b, 0.0)
+                new_field.copy_coefficients(coef)
+
+                field = new_field
+                b_coeff = gr.unwrap_scalar_field(coef)
+            else:
+                print ("Keeping field as is")
+
+            b = field.get_volume()
+            b = b.astype(np.float64)
+
+            # smooth out images and compute spatial derivatives
+            current1 = sp.ndimage.filters.gaussian_filter(sub1, sigma_vox)
+            current2 = sp.ndimage.filters.gaussian_filter(sub2, sigma_vox)
+
+            # Start gradient descent
+            for it in range(self.level_iters[stage]):
+                print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
+                energy, grad = self.distortion_model.energy_and_gradient(
+                                                current1, current2, field)
+                grad = np.array(gr.unwrap_scalar_field(grad))
+
+                bending_grad = field.spline3d.get_bending_gradient(
+                                                field.coef, resampled_sp)
+                bending_grad = tps_lambda * np.array(bending_grad)
+
+                print("Energy: %f"%(energy,))
+                step = -1 * (grad + bending_grad)
+                step = step_length * (step/np.abs(step).max())
+                if b_coeff is None:
+                    b_coeff = step
+                else:
+                    b_coeff += step
+
+                field.copy_coefficients(b_coeff)
+                b = field.get_volume()
+                b = b.astype(np.float64)
+        return field
 
 
 def test_epicor_api_cc():
@@ -303,19 +395,39 @@ def test_epicor_api_cc():
     up_nib = nib.load(up_fname)
     up_affine = up_nib.get_affine()
     direction, spacings = imwarp.get_direction_and_spacings(up_affine, 3)
-    up_affine_inv = np.linalg.inv(up_affine)
     up = up_nib.get_data().squeeze().astype(np.float64)
-    up /= up.mean()
 
     down_nib = nib.load(down_fname)
-    down_affine = down_nib.get_affine()
-    down_affine_inv = np.linalg.inv(down_affine)
+    down = down_nib.get_data().squeeze().astype(np.float64)
+
+    # Preprocess intensities
+    up /= up.mean()
+    down /= down.mean()
+    max_subsampling = 2
+    in_shape = np.array(up.shape, dtype=np.int32)
+    # This makes no sense, it should be + (max_subsampling - regrid_shape%max_subsampling)%max_subsampling
+    regrid_shape = in_shape + max_subsampling
+    regrided_spacings = ((in_shape - 1) * spacings) / regrid_shape
+    factors = regrided_spacings / spacings
+    regrided_up = np.array(gr.regrid(up, factors, regrid_shape)).astype(np.float64)
+    regrided_down = np.array(gr.regrid(down, factors, regrid_shape)).astype(np.float64)
 
     # Configure and run orfield estimation
     distortion_model = OppositeBlips_CC(radius=4)
     estimator = OffResonanceFieldEstimator(distortion_model)
-    estimator.optimize()
+    orfield = estimator.optimize(regrided_down, regrided_up,
+                                 regrided_spacings)
 
+    # Warp and modulte images
+    b  = np.array(orfield.get_volume((0, 0, 0)))
+    db = np.array(orfield.get_volume((0, 1, 0)))
+    shape = np.array(regrided_up.shape, dtype=np.int32)
+    pedir_down = np.array((0,-1,0), dtype=np.float64)
+    pedir_up = np.array((0,1,0), dtype=np.float64)
+    w_up, _m = gr.warp_with_orfield(regrided_up, b, pedir_up, None,
+                                    None, None, shape)
+    w_down, _m = gr.warp_with_orfield(regrided_down, b, pedir_down, None,
+                                      None, None, shape)
 
 
 
