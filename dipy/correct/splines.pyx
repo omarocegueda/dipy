@@ -805,9 +805,9 @@ cdef class Spline3D:
                                 row += 1
                     indptr[row] = cnt
 
-
-    cdef void _get_bending_gradient(self, double[:,:,:] coef,
-                                    double[:] vox_size, double[:] grad):
+    cpdef double _get_bending_gradient(self, double[:,:,:] coef,
+                                      double[:] vox_size, int[:] vol_shape,
+                                      double[:] grad):
         cdef:
             int nnx = self.sx._num_overlapping()
             int nny = self.sy._num_overlapping()
@@ -818,8 +818,12 @@ cdef class Spline3D:
             int cz = nnz // 2
 
             int ddir1, ddir2
-            int *der = [0, 0, 0]
+            int[:] der = np.zeros(3, dtype=np.int32)
             double[:] prods = np.ndarray(nnx*nny*nnz, dtype=np.float64)
+            double[:,:,:] vol = np.zeros(tuple(vol_shape), dtype=np.float64)
+            int first[3]
+            int last[3]
+            int offset[3]
 
             int ncx = coef.shape[0]
             int ncy = coef.shape[1]
@@ -827,10 +831,12 @@ cdef class Spline3D:
             int i, j, k, ii, jj, kk, cnt
             int row, col
             double mult # twice the multiplicity of the cross derivatives
-            double sz_norm # normalization factor to compensate for voxel size
+            double sz_norm, sz_norm2 # normalization factor to compensate for voxel size
+            double energy
 
         with nogil:
             grad[:] = 0
+            energy = 0;
             for ddir1 in range(3):
                 for ddir2 in range(ddir1, 3):
                     der[0] = 0
@@ -838,15 +844,25 @@ cdef class Spline3D:
                     der[2] = 0
                     der[ddir1] += 1
                     der[ddir2] += 1
+                    with gil:
+                        self._eval_spline_field(coef, der, vol)
                     self._get_all_autocorrelations(der[0], der[1], der[2], prods)
+
                     sz_norm = 1.0 / (vox_size[ddir1] * vox_size[ddir2])
-                    sz_norm *= sz_norm
+                    sz_norm2 = sz_norm * sz_norm
                     if ddir1 == ddir2:
                         mult = 2.0
                     else:
                         mult = 4.0
 
-                    # Accumulate this second order derivative
+                    # Accumulate this second order derivative's energy
+                    # Iterate over all voxels
+                    for i in range(vol_shape[0]):
+                        for j in range(vol_shape[1]):
+                            for k in range(vol_shape[2]):
+                                energy += 0.5 * mult * sz_norm2 * vol[i,j,k] * vol[i,j,k]
+
+                    # Accumulate contributions to the gradient
                     # Iterate over all coefficients
                     row = 0
                     for i in range(ncx):
@@ -866,8 +882,11 @@ cdef class Spline3D:
                                             idx = (ii - i + cx)*nny*nnz +\
                                                   (jj - j + cy)*nnz +\
                                                   (kk - k + cz)
-                                            grad[row] += mult * sz_norm * coef[ii,jj,kk] * prods[idx]
+                                            grad[row] += mult * sz_norm2 * coef[ii,jj,kk] * prods[idx]
                                 row += 1
+        return energy
+
+
 
 
 
@@ -893,15 +912,7 @@ cdef class Spline3D:
         return grad, data, indices, indptr
 
 
-    def get_bending_gradient(self, double[:,:,:] coef, double[:] vox_size):
-        cdef:
-            double[:] grad = np.empty(coef.size)
-            int ncoef = coef.shape[0] * coef.shape[1] * coef.shape[2]
-            int n_overlaps = self.sx._num_overlapping() *\
-                             self.sy._num_overlapping() *\
-                             self.sz._num_overlapping()
-        self._get_bending_gradient(coef, vox_size, grad)
-        return grad
+
 
 
     def __dealloc__(self):
@@ -943,6 +954,18 @@ class CubicSplineField:
         self.grid_shape = np.array([nkx, nky, nkz], dtype=np.int32)
         self.vol_shape = vol_shape
         self.kspacing = kspacing
+        self.coef = None
+
+
+
+    def get_bending_gradient(self):
+        cdef:
+            double[:] grad = np.empty(self.coef.size)
+            int ncoef = self.coef.shape[0] * self.coef.shape[1] * self.coef.shape[2]
+            double energy
+        energy = self.spline3d._get_bending_gradient(self.coef, np.array(self.kspacing, dtype=np.float64),
+                                                     np.array(self.vol_shape, dtype=np.int32), grad)
+        return energy, grad
 
     def num_coefficients(self):
         return self.grid_shape[0] * self.grid_shape[1] * self.grid_shape[2]
