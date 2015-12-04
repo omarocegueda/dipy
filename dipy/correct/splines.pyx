@@ -812,6 +812,7 @@ cdef class Spline3D:
             int nnx = self.sx._num_overlapping()
             int nny = self.sy._num_overlapping()
             int nnz = self.sz._num_overlapping()
+            int nvox = vol_shape[0] * vol_shape[1] * vol_shape[2]
             int nx, ny, nz
             int cx = nnx // 2
             int cy = nny // 2
@@ -820,7 +821,7 @@ cdef class Spline3D:
             int ddir1, ddir2
             int[:] der = np.zeros(3, dtype=np.int32)
             double[:] prods = np.ndarray(nnx*nny*nnz, dtype=np.float64)
-            double[:,:,:] vol = np.zeros(tuple(vol_shape), dtype=np.float64)
+            #double[:,:,:] vol = np.zeros(tuple(vol_shape), dtype=np.float64)
             int first[3]
             int last[3]
             int offset[3]
@@ -831,7 +832,7 @@ cdef class Spline3D:
             int i, j, k, ii, jj, kk, cnt
             int row, col
             double mult # twice the multiplicity of the cross derivatives
-            double sz_norm, sz_norm2 # normalization factor to compensate for voxel size
+            double sz_norm=1, sz_norm2=1 # normalization factor to compensate for voxel size
             double energy
 
         with nogil:
@@ -844,12 +845,13 @@ cdef class Spline3D:
                     der[2] = 0
                     der[ddir1] += 1
                     der[ddir2] += 1
-                    with gil:
-                        self._eval_spline_field(coef, der, vol)
+                    #with gil:
+                    #    self._eval_spline_field(coef, der, vol)
                     self._get_all_autocorrelations(der[0], der[1], der[2], prods)
 
                     sz_norm = 1.0 / (vox_size[ddir1] * vox_size[ddir2])
-                    sz_norm2 = sz_norm * sz_norm
+                    sz_norm2 = sz_norm
+                    #sz_norm2 = sz_norm * sz_norm
                     if ddir1 == ddir2:
                         mult = 2.0
                     else:
@@ -857,10 +859,10 @@ cdef class Spline3D:
 
                     # Accumulate this second order derivative's energy
                     # Iterate over all voxels
-                    for i in range(vol_shape[0]):
-                        for j in range(vol_shape[1]):
-                            for k in range(vol_shape[2]):
-                                energy += 0.5 * mult * sz_norm2 * vol[i,j,k] * vol[i,j,k]
+                    #for i in range(vol_shape[0]):
+                    #    for j in range(vol_shape[1]):
+                    #        for k in range(vol_shape[2]):
+                    #            energy += 0.5 * mult * sz_norm2 * vol[i,j,k] * vol[i,j,k]
 
                     # Accumulate contributions to the gradient
                     # Iterate over all coefficients
@@ -883,7 +885,9 @@ cdef class Spline3D:
                                                   (jj - j + cy)*nnz +\
                                                   (kk - k + cz)
                                             grad[row] += mult * sz_norm2 * coef[ii,jj,kk] * prods[idx]
+                                grad[row] /= nvox
                                 row += 1
+        energy /= nvox
         return energy
 
 

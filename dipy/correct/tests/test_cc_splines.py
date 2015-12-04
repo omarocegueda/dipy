@@ -2,6 +2,7 @@ from __future__ import print_function
 import os
 import pickle
 import numpy as np
+import numpy.linalg as npl
 import scipy as sp
 import scipy.sparse
 import scipy.sparse.linalg
@@ -22,20 +23,33 @@ from inverse.dfinverse_3d import warp_points_3d, compute_jacobian_3d
 import experiments.registration.dataset_info as info
 from dipy.align.expectmax import (quantize_positive_3d,
                                   compute_masked_class_stats_3d)
-from dipy.align import floating
+#from dipy.align import floating
 from experiments.registration.regviz import (overlay_slices,
                                              overlay_slices_with_contours)
+from dipy.align.scalespace import IsotropicScaleSpace
 #import mayavi
 #import mayavi.mlab as mlab
 #from tvtk.tools import visual
 #from tvtk.api import tvtk
-
+floating = np.float64
 data_dir = '/home/omar/data/topup_example/'
 up_fname = data_dir + "b0_blipup.nii"
 #up_fname = info.get_scil(1, 'b0_up_strip')
 down_fname = data_dir + "b0_blipdown.nii"
 up_unwarped_fname = data_dir+'b0_blipup_unwarped.nii'
 t1_fname = info.get_scil(1, 't1_strip')
+
+def load_topup_results():
+    topup_corrected_fname = data_dir + 'results_topup_mdesco/unwarped_images.nii.gz'
+    topup_corrected_nib = nib.load(topup_corrected_fname)
+    topup_corrected = topup_corrected_nib.get_data().squeeze()
+    tc0 = topup_corrected[...,0][::-1,:,:]
+    tc1 = topup_corrected[...,1][::-1,:,:]
+    overlay_slices(tc0, tc1, slice_type=2)
+    tp_field_fname = data_dir + 'results_topup_mdesco/field.nii.gz'
+    tp_field_nib = nib.load(tp_field_fname)
+    tp_field = tp_field_nib.get_data().squeeze()
+    overlay_slices(tp_field, tp_field, slice_type=2)
 
 def dipy_align(static, static_grid2world, moving, moving_grid2world):
     r''' Full rigid registration with Dipy's imaffine module
@@ -159,7 +173,7 @@ class OppositeBlips_CC(EPIDistortionModel):
                                             None, None, kernel, dkernel,
                                             db, kspacing, field_shape,
                                             self.radius, kcoef_grad)
-        return -1 * energy, -1 * kcoef_grad
+        return energy, kcoef_grad
 
 
 class SingleEPI_CC(EPIDistortionModel):
@@ -191,7 +205,8 @@ class OffResonanceFieldEstimator(object):
                  subsampling=None,
                  warp_res=None,
                  fwhm=None,
-                 lambdas=None):
+                 lambdas=None,
+                 step_lengths=None):
         r""" OffResonanceFieldEstimator
 
         Estimates the off-resonance field causing geometric distortions and
@@ -222,10 +237,14 @@ class OffResonanceFieldEstimator(object):
             stage. If None (default), the regularization parameters are set
             to
             [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.005, 0.0005]
+        step_lengths : sequence of floats
+            the step length in the gradient descent optimization for each
+            resolution. The step length is the maximum spline coefficient
+            variation at each iteration
         """
         self.distortion_model = distortion_model
         if level_iters is None:
-            level_iters = [200, 100, 50, 25, 12, 10, 10, 5, 5]
+            level_iters = [100, 50, 50, 25, 100, 50, 25, 15, 10]
         if subsampling is None:
             subsampling = [2, 2, 2, 2, 2, 1, 1, 1, 1]
         if warp_res is None:
@@ -233,10 +252,63 @@ class OffResonanceFieldEstimator(object):
         if fwhm is None:
             fwhm = [8, 6, 4, 3, 3, 2, 1, 0, 0]
         if lambdas is None:
-            lambdas = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05,
-                       0.05, 0.05, 0.005]
+            lambdas = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                       0.5, 0.5, 0.05]
+        if step_lengths is None:
+            step_lengths = [0.2, 0.2, 0.2, 0.2, 0.2,
+                            0.35, 0.35, 0.35, 0.35]
         self._set_multires_params(level_iters, subsampling, warp_res,
-                                  fwhm, lambdas)
+                                  fwhm, lambdas, step_lengths)
+        self.energy_list = []
+        self.energy_window = 12
+
+    def _approximate_derivative_direct(self, x, y):
+        r"""Derivative of the degree-2 polynomial fit of the given x, y pairs
+
+        Directly computes the derivative of the least-squares-fit quadratic
+        function estimated from (x[...],y[...]) pairs.
+
+        Parameters
+        ----------
+        x : array, shape (n,)
+            increasing array representing the x-coordinates of the points to
+            be fit
+        y : array, shape (n,)
+            array representing the y-coordinates of the points to be fit
+
+        Returns
+        -------
+        y0 : float
+            the estimated derivative at x0 = 0.5*len(x)
+        """
+        x = np.asarray(x)
+        y = np.asarray(y)
+        X = np.row_stack((x**2, x, np.ones_like(x)))
+        XX = (X).dot(X.T)
+        b = X.dot(y)
+        beta = npl.solve(XX, b)
+        x0 = 0.5 * len(x)
+        y0 = 2.0 * beta[0] * (x0) + beta[1]
+        return y0
+
+
+    def _get_energy_derivative(self):
+        r"""Approximate derivative of the energy profile
+
+        Returns the derivative of the estimated energy as a function of "time"
+        (iterations) at the last iteration
+        """
+        n_iter = len(self.energy_list)
+        if n_iter < self.energy_window:
+            raise ValueError('Not enough data to fit the energy profile')
+        x = range(self.energy_window)
+        y = self.energy_list[(n_iter - self.energy_window):n_iter]
+        ss = sum(y)
+        if(ss > 0):
+            ss *= -1
+        y = [v / ss for v in y]
+        der = self._approximate_derivative_direct(x, y)
+        return der
 
     def _set_nstages_from_sequence(self, seq):
         r""" Sets the number of stages of the multiresolution strategy
@@ -262,7 +334,8 @@ class OffResonanceFieldEstimator(object):
             raise ValueError('Inconsistent multiresolution settings')
 
     def _set_multires_params(self, level_iters=None, subsampling=None,
-                             warp_res=None, fwhm=None, lambdas=None):
+                             warp_res=None, fwhm=None, lambdas=None,
+                             step_lengths=None):
         r""" Verify that the multi-resolution parameters are consistent
 
         Parameters
@@ -303,15 +376,35 @@ class OffResonanceFieldEstimator(object):
         if lambdas is not None:
             self.lambdas = np.copy(lambdas)
         self._set_nstages_from_sequence(self.lambdas)
+        if step_lengths is not None:
+            self.step_lengths = np.copy(step_lengths)
+        self._set_nstages_from_sequence(self.step_lengths)
 
     def optimize(self, f1, f1_pedir, f2, f2_pedir, spacings):
         r""" Start off-resonance field estimation
         """
+        try_isotropic_ss = False
+        if try_isotropic_ss:
+            fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+            self.f1_ss = IsotropicScaleSpace(f1,
+                                             self.subsampling,
+                                             self.fwhm / fwhm2sigma,
+                                             None,
+                                             spacings,
+                                             False)
+            self.f2_ss = IsotropicScaleSpace(f2,
+                                             self.subsampling,
+                                             self.fwhm / fwhm2sigma,
+                                             None,
+                                             spacings,
+                                             False)
         field = None
         b = None
         b_coeff = None
-        step_length = 0.35
+        self.fields = []
+        self.images = []
         for stage in range(self.nstages):
+            step_length = self.step_lengths[stage]
             print("Stage: %d / %d"%(stage + 1, self.nstages))
             if self.subsampling[stage] > 1:
                 sub1 = vfu.downsample_scalar_field_3d(f1)
@@ -369,9 +462,14 @@ class OffResonanceFieldEstimator(object):
             # smooth out images and compute spatial derivatives
             current1 = sp.ndimage.filters.gaussian_filter(sub1, sigma_vox)
             current2 = sp.ndimage.filters.gaussian_filter(sub2, sigma_vox)
+            self.images.append([current1, current2])
             #rt.overlay_slices(current1, current2, slice_type=2)
+            #current1 = self.f1_ss.get_image(self.nstages - 1 - stage)
+            #current2 = self.f2_ss.get_image(self.nstages - 1 - stage)
 
             # Start gradient descent
+            self.energy_list = []
+            tolerance = 1e-6
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
 
@@ -382,18 +480,33 @@ class OffResonanceFieldEstimator(object):
                 bending_energy, bending_grad = field.get_bending_gradient()
                 bending_grad = tps_lambda * np.array(bending_grad)
 
-                energy += tps_lambda * bending_energy
-                print("Energy: %f"%(energy,))
+                bending_energy *= tps_lambda
+                total_energy = energy + bending_energy
+                self.energy_list.append(total_energy)
+                #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
                 step = -1 * (grad + bending_grad)
                 step = step_length * (step/np.abs(step).max())
                 if b_coeff is None:
                     b_coeff = step
                 else:
                     b_coeff += step
-
                 field.copy_coefficients(b_coeff)
+                if len(self.energy_list)>=self.energy_window:
+                    der = self._get_energy_derivative()
+                    if der < tolerance:
+                        break
+                else:
+                    der = np.inf
+                print("Energy: %f. [%f]"%(total_energy, der))
+            self.fields.append(field.get_volume())
         return field
 
+def extend_volume(vol, margin):
+    dims = np.array(vol.shape)
+    dims += 2 * margin
+    new_vol = np.zeros(tuple(dims))
+    new_vol[margin:-margin, margin:-margin, margin:-margin] = vol[...]
+    return new_vol.astype(vol.dtype)
 
 def test_epicor_api_cc():
     # Load images
@@ -404,6 +517,14 @@ def test_epicor_api_cc():
 
     down_nib = nib.load(down_fname)
     down = down_nib.get_data().squeeze().astype(np.float64)
+
+    radius = 4
+
+    use_extend_volume = True
+    if use_extend_volume:
+        up = extend_volume(up, 2 * radius + 1)
+        down = extend_volume(down, 2 * radius + 1)
+
 
     # Preprocess intensities
     up /= up.mean()
@@ -420,11 +541,16 @@ def test_epicor_api_cc():
     # Configure and run orfield estimation
     pedir_up = np.array((0,1,0), dtype=np.float64)
     pedir_down = np.array((0,-1,0), dtype=np.float64)
-    distortion_model = OppositeBlips_CC(radius=4)
-    #level_iters = [10, 1, 1, 1, 1, 1, 1, 1, 1]
+    distortion_model = OppositeBlips_CC(radius=radius)
+    level_iters = [1, 1, 1, 1, 1, 1, 1, 1, 1]
     #lambdas = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e1])/5000.0
-    #estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas)
-    estimator = OffResonanceFieldEstimator(distortion_model)
+    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    #level_iters = None
+    lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                       0.5, 0.05, 0.05])*300
+    fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
+    estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
+    #estimator = OffResonanceFieldEstimator(distortion_model)
     orfield = estimator.optimize(regrided_down, pedir_down, regrided_up, pedir_up, regrided_spacings)
 
     # Warp and modulte images
@@ -435,11 +561,14 @@ def test_epicor_api_cc():
                                     None, None, shape)
     w_down, _m = gr.warp_with_orfield(regrided_down, b, pedir_down, None,
                                       None, None, shape)
+    rt.plot_slices(b)
+    overlay_slices(w_down, w_up, slice_type=2)
+    overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
 
 
 
 
-def test_cc_splines():
+def test_cc_splines_old():
     # Prameters
     radius = 4  # CC radius
     nstages = 1  # Multi-resolution stages
@@ -451,8 +580,8 @@ def test_cc_splines():
     lambda1 = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2])*2
     lambda2 = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e1, 1])
     #max_iter = np.array([200, 40, 20, 10, 10, 10, 10, 10, 10], dtype=np.int32)
-    #max_iter = np.array([100, 50, 25, 20, 10, 10, 10, 10, 10], dtype=np.int32)
-    max_iter = np.array([10, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.int32)
+    max_iter = np.array([100, 50, 25, 20, 10, 10, 10, 10, 10], dtype=np.int32)
+    #max_iter = np.array([10, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.int32)
     step_sizes = np.array([0.3, 0.25, 0.15, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float64)*0+0.35
     #max_iter = np.array([2, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.int32)
     pedir_factor = 1.0

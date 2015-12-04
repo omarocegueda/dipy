@@ -158,6 +158,7 @@ def cc_splines_gradient(double[:,:,:] g, double[:,:,:] f,
                         _increment_factors(factors, temp, sss, rr, cc, s, r, c-side, -1)
                     # Compute final factors
                     if ss>=radius and rr>=radius and cc>=radius:
+                        nwindows += 1
                         firstc = _int_max(0, cc - radius)
                         lastc = _int_min(nc - 1, cc + radius)
                         sidec = (lastc - firstc + 1)
@@ -172,8 +173,7 @@ def cc_splines_gradient(double[:,:,:] g, double[:,:,:] f,
                         A = temp[ss, rr, cc, 2]  # dot product: A
                         C = temp[ss, rr, cc, 3]  # static sq norm: C
                         B = temp[ss, rr, cc, 4]  # moving sq norm: B
-                        if B*B*C > 1e-5:
-                            nwindows += 1
+                        if B*C > 1e-5:
                             energy += (A * A) / (B * C)
 
                             alpha = factors[sss, rr, cc, 0]
@@ -352,6 +352,7 @@ def cc_splines_gradient_epicor(double[:,:,:] g, double[:,:,:] f,
                         _increment_factors_epicor(factors, temp, sss, rr, cc, s, r, c-side, -1)
                     # Compute final factors
                     if ss>=radius and rr>=radius and cc>=radius:
+                        nwindows += 1
                         firstc = _int_max(0, cc - radius)
                         lastc = _int_min(nc - 1, cc + radius)
                         sidec = (lastc - firstc + 1)
@@ -366,8 +367,8 @@ def cc_splines_gradient_epicor(double[:,:,:] g, double[:,:,:] f,
                         A = temp[ss, rr, cc, 2]  # dot product: A
                         C = temp[ss, rr, cc, 3]  # static sq norm: C
                         B = temp[ss, rr, cc, 4]  # moving sq norm: B
-                        if (B*B*C > 1e-7) and (C*C*B > 1e-7):
-                            nwindows += 1
+                        #if (B*B*C > 1e-5) and (C*C*B > 1e-5):
+                        if (B*C > 1e-7):
                             energy += (A * A) / (B * C)
 
                             alpha = factors[sss, rr, cc, 0]
@@ -409,8 +410,8 @@ def cc_splines_gradient_epicor(double[:,:,:] g, double[:,:,:] f,
         for k in range(kcoef.shape[0]):
             for i in range(kcoef.shape[1]):
                 for j in range(kcoef.shape[2]):
-                    kcoef[k, i, j] = 2.0 * kcoef[k, i, j] / nwindows
-        energy /= nwindows
+                    kcoef[k, i, j] = -2.0 * kcoef[k, i, j] / nwindows
+        energy = 1-energy/nwindows
     return energy
 
 
