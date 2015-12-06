@@ -208,8 +208,8 @@ def cc_splines_gradient(double[:,:,:] g, double[:,:,:] f,
         for k in range(kcoef.shape[0]):
             for i in range(kcoef.shape[1]):
                 for j in range(kcoef.shape[2]):
-                    kcoef[k, i, j] = 2.0 * kcoef[k, i, j] / nwindows
-        energy /= nwindows
+                    kcoef[k, i, j] = -2.0 * kcoef[k, i, j] / nwindows
+        energy = 1.0 - energy/nwindows
     return energy
 
 

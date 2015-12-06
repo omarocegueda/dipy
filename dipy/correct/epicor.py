@@ -1,6 +1,7 @@
 import numpy as np
 import numpy.linalg as npl
 import scipy as sp
+import dipy.viz.regtools as rt
 import dipy.correct.gradients as gr
 from dipy.align import expectmax as em
 from dipy.align import crosscorr as cc
@@ -8,7 +9,8 @@ from dipy.align import vector_fields as vfu
 from dipy.align.imaffine import AffineMap
 from dipy.align.scalespace import IsotropicScaleSpace
 from dipy.correct.splines import CubicSplineField
-from dipy.correct.cc_splines import cc_splines_gradient_epicor
+from dipy.correct.cc_splines import (cc_splines_gradient_epicor,
+                                     cc_splines_gradient)
 
 floating = np.float64
 
@@ -35,7 +37,8 @@ class OppositeBlips_CC(EPIDistortionModel):
         """
         self.radius = radius
 
-    def energy_and_gradient(self, down, down_pedir, up, up_pedir, field):
+    def energy_and_gradient(self, down, down_pedir, up, up_pedir, field,
+                            mask_down=None, mask_up=None):
         current_shape = np.array(up.shape, dtype=np.int32)
         b  = np.array(field.get_volume((0,0,0)))
         b = b.astype(np.float64)
@@ -84,11 +87,48 @@ class SingleEPI_CC(EPIDistortionModel):
     def __init__(self,
                  radius=4):
         r""" SingleEPI_CC
+        EPI distortion model based on a single EPI image and a T2 non-EPI
+        image (undistorted). The metric is the modulated CC metric.
         """
         self.radius = radius
 
-    def energy_and_gradient(self, down, down_pedir, up, up_pedir, field):
-        return None
+    def energy_and_gradient(self, nonepi, nonepi_pedir, epi, epi_pedir, field,
+                            mask_nonepi=None, mask_epi=None):
+        current_shape = np.array(epi.shape, dtype=np.int32)
+        b  = np.array(field.get_volume((0,0,0)))
+        b = b.astype(np.float64)
+
+        db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
+        kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
+        dkernel = np.array(field.spline3d.get_kernel_grid((0,1,0)))
+        kspacing = field.kspacing
+        field_shape = field.grid_shape
+        kcoef_grad = np.zeros_like(field.coef)
+
+        # Numerical derivatives of input images
+        depi = gr.der_y(epi)
+        dnonepi = gr.der_y(nonepi)
+
+        # Warp images and their derivatives
+        w_epi, _m = gr.warp_with_orfield(epi, b, epi_pedir, None,
+                                        None, None, current_shape)
+        dw_epi, _m = gr.warp_with_orfield(depi, b, epi_pedir, None,
+                                         None, None, current_shape)
+
+        dw_epi = gr.der_y(w_epi)
+        # Convert to numpy arrays
+        w_epi = np.array(w_epi)
+        dw_epi = np.array(dw_epi)
+        pedir_factor = epi_pedir[1]
+
+        # This should consider more general PE directions, but for now
+        # it assumes it's along the y axis
+        energy = cc_splines_gradient(nonepi, w_epi, dnonepi, dw_epi,
+                                     pedir_factor,
+                                     None, None, kernel, dkernel,
+                                     db, kspacing, field_shape,
+                                     self.radius, kcoef_grad)
+        return energy, kcoef_grad
 
 
 class SingleEPI_ECC(EPIDistortionModel):
@@ -98,12 +138,12 @@ class SingleEPI_ECC(EPIDistortionModel):
         self.radius = radius
         self.q_levels = q_levels
 
-        self.static_image_mask = None
-        self.moving_image_mask = None
-        self.staticq_means_field = None
-        self.movingq_means_field = None
-        self.movingq_levels = None
-        self.staticq_levels = None
+        self.nonepi_mask = None
+        self.epi_mask = None
+        self.nonepiq_means_field = None
+        self.eqiq_means_field = None
+        self.epiq_levels = None
+        self.nonepiq_levels = None
 
         self.precompute_factors = cc.precompute_cc_factors_3d
         self.compute_forward_step = cc.compute_cc_forward_step_3d
@@ -112,130 +152,101 @@ class SingleEPI_ECC(EPIDistortionModel):
         self.quantize = em.quantize_positive_3d
         self.compute_stats = em.compute_masked_class_stats_3d
 
-    def initialize_iteration(self):
+    def initialize_iteration(self, epi, pedir, nonepi, field,
+                             epi_mask=None, nonepi_mask=None):
         r"""
         Pre-computes the cross-correlation factors
         """
         ##################################################
         #Estimate the hidden variables (EM-initialization)
         ##################################################
+        self.epi = epi
+        self.nonepi = nonepi
+        self.epi_mask = epi_mask
+        self.nonepi_mask = nonepi_mask
+
         #Use only the foreground intersection for estimation
-        sampling_mask = np.array(self.static_image_mask*self.moving_image_mask, dtype = np.int32)
+        sampling_mask = np.array(self.nonepi_mask*self.epi_mask, dtype = np.int32)
         self.sampling_mask = sampling_mask
 
-        #Process the Static image quantization
-        staticq, self.staticq_levels, hist = self.quantize(self.static_image,
+        #Process the non-epi quantization
+        nonepiq, self.nonepiq_levels, hist = self.quantize(self.nonepi,
                                                            self.q_levels)
-        staticq = np.array(staticq, dtype=np.int32)
-        self.staticq_levels = np.array(self.staticq_levels)
-        staticq_means, staticq_variances = self.compute_stats(sampling_mask,
-                                                              self.moving_image,
+        nonepiq = np.array(nonepiq, dtype=np.int32)
+        self.nonepiq_levels = np.array(self.nonepiq_levels)
+        nonepiq_means, nonepiq_variances = self.compute_stats(sampling_mask,
+                                                              self.epi,
                                                               self.q_levels,
-                                                              staticq)
-        staticq_means[0] = 0
-        self.staticq_means = np.array(staticq_means)
-        self.staticq_variances = np.array(staticq_variances)
-        self.staticq_variances[np.isinf(self.staticq_variances)] = self.staticq_variances.max()
-        self.staticq_sigma_sq_field = self.staticq_variances[staticq]
-        self.staticq_means_field = self.staticq_means[staticq]
+                                                              nonepiq)
+        nonepiq_means[0] = 0
+        self.nonepiq_means = np.array(nonepiq_means)
+        self.nonepiq_variances = np.array(nonepiq_variances)
+        self.nonepiq_variances[np.isinf(self.nonepiq_variances)] = self.nonepiq_variances.max()
+        self.nonepiq_sigma_sq_field = self.nonepiq_variances[nonepiq]
+        self.nonepiq_means_field = self.nonepiq_means[nonepiq]
 
-        #Process the Moving image quantization
-        movingq, self.movingq_levels, hist = self.quantize(self.moving_image,
+        #Process the epi quantization
+        epiq, self.epiq_levels, hist = self.quantize(self.epi,
                                                            self.q_levels)
-        movingq = np.array(movingq, dtype=np.int32)
-        self.movingq_levels = np.array(self.movingq_levels)
-        movingq_means, movingq_variances = self.compute_stats(
-            sampling_mask, self.static_image, self.q_levels, movingq)
-        movingq_means[0] = 0
-        self.movingq_means = np.array(movingq_means)
-        self.movingq_variances = np.array(movingq_variances)
-        self.movingq_variances[np.isinf(self.movingq_variances)] = self.movingq_variances.max()
-        self.movingq_sigma_sq_field = self.movingq_variances[movingq]
-        self.movingq_means_field = self.movingq_means[movingq]
+        epiq = np.array(epiq, dtype=np.int32)
+        self.epiq_levels = np.array(self.epiq_levels)
+        epiq_means, epiq_variances = self.compute_stats(
+            sampling_mask, self.nonepi, self.q_levels, epiq)
+        epiq_means[0] = 0
+        self.epiq_means = np.array(epiq_means)
+        self.epiq_variances = np.array(epiq_variances)
+        self.epiq_variances[np.isinf(self.epiq_variances)] = self.epiq_variances.max()
+        self.epiq_sigma_sq_field = self.epiq_variances[epiq]
+        self.epiq_means_field = self.epiq_means[epiq]
 
         ##################################################
         #Compute the CC factors (CC-initialization)
         ##################################################
-        only_one_modality = False
-        if only_one_modality:
-            #Compare the goodness of fit
-            staticq_mse = np.sum((self.staticq_means_field - self.moving_image)**2, -1).mean()
-            movingq_mse = np.sum((self.movingq_means_field - self.static_image)**2, -1).mean()
 
-            if staticq_mse < movingq_mse:
-                self.staticq_factors = self.precompute_factors(self.staticq_means_field,
-                                                 self.moving_image,
-                                                 self.radius)
-                self.movingq_factors = self.staticq_factors
-                #print('Staticq selected')
-            else:
-                self.movingq_factors = self.precompute_factors(self.static_image,
-                                                 self.movingq_means_field,
-                                                 self.radius)
-                self.staticq_factors = self.movingq_factors
-                #print('Movingq selected')
-        else:
-            self.staticq_factors = self.precompute_factors(self.staticq_means_field,
-                                                 self.moving_image,
-                                                 self.radius)
-            self.movingq_factors = self.precompute_factors(self.static_image,
-                                                 self.movingq_means_field,
-                                                 self.radius)
-
-        self.staticq_factors = np.array(self.staticq_factors)
-        self.movingq_factors = np.array(self.movingq_factors)
+        #self.nonepiq_factors = self.precompute_factors(self.nonepiq_means_field,
+        #                                     self.epi,
+        #                                     self.radius)
+        #self.epiq_factors = self.precompute_factors(self.nonepi,
+        #                                     self.epiq_means_field,
+        #                                     self.radius)
+        #
+        #self.nonepiq_factors = np.array(self.nonepiq_factors)
+        #self.epiq_factors = np.array(self.epiq_factors)
 
         ##################################################
         #Compute the gradients (common initialization)
         ##################################################
-        if only_one_modality:
-            if staticq_mse < movingq_mse: #choose staticq_means_field as static
-                self.gradient_moving = np.empty(
-                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
-                for i, grad in enumerate(sp.gradient(self.moving_image)):
-                    self.gradient_moving[..., i] = grad
+        self.gradient_epi = np.empty(
+                shape=(self.epi.shape)+(3,), dtype=np.float64)
+        for i, grad in enumerate(sp.gradient(self.epi)):
+            self.gradient_epi[..., i] = grad
 
-                self.gradient_static = np.empty(
-                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
-                for i, grad in enumerate(sp.gradient(self.staticq_means_field)):
-                    self.gradient_static[..., i] = grad
-            else: #choose movingq_means_field as moving
-                self.gradient_moving = np.empty(
-                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
-                for i, grad in enumerate(sp.gradient(self.movingq_means_field)):
-                    self.gradient_moving[..., i] = grad
+        self.gradient_nonepi = np.empty(
+                shape=(self.nonepi.shape)+(3,), dtype=np.float64)
+        for i, grad in enumerate(sp.gradient(self.nonepi)):
+            self.gradient_nonepi[..., i] = grad
 
-                self.gradient_static = np.empty(
-                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
-                for i, grad in enumerate(sp.gradient(self.static_image)):
-                    self.gradient_static[..., i] = grad
-        else:
-            self.gradient_moving = np.empty(
-                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.moving_image)):
-                self.gradient_moving[..., i] = grad
+        # Note: the gradient needs to be in grid-space to estimate the
+        # off-resonance field, but it must be in physical space to
+        # align the non-epi image
 
-            self.gradient_static = np.empty(
-                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
-            for i, grad in enumerate(sp.gradient(self.static_image)):
-                self.gradient_static[..., i] = grad
-        #Convert the moving image's gradient field from voxel to physical space
-        if self.moving_spacing is not None:
-            self.gradient_moving /= self.moving_spacing
-        if self.moving_direction is not None:
-            self.reorient_vector_field(self.gradient_moving,
-                                       self.moving_direction)
 
-        #Convert the moving image's gradient field from voxel to physical space
-        if self.static_spacing is not None:
-            self.gradient_static /= self.static_spacing
-        if self.static_direction is not None:
-            self.reorient_vector_field(self.gradient_static,
-                                       self.static_direction)
+    def energy_and_gradient_single(self, epi, pedir, nonepi, field,
+                                   epi_mask=None, nonepi_mask=None):
+        self.initialize_iteration(epi, pedir, nonepi, field, epi_mask, nonepi_mask)
+        rt.overlay_slices(self.epi, self.nonepiq_means_field, slice_type=2)
+        #rt.overlay_slices(self.epiq_means_field, self.nonepi, slice_type=2)
+        return None, None
 
-    def energy_and_gradient(self, epi, pedir, non_epi, field):
+    def energy_and_gradient(self, epi, epi_pedir, non_epi, non_epi_pedir,
+                            field, epi_mask=None, nonepi_mask=None):
+        r"""
+        Ignore `non_epi_pedir` parameter
+        """
+        return self.energy_and_gradient_single(epi, epi_pedir, non_epi, field,
+                                               epi_mask, nonepi_mask)
 
-        return None
+
 
 
 class OffResonanceFieldEstimator(object):
@@ -423,21 +434,6 @@ class OffResonanceFieldEstimator(object):
     def optimize(self, f1, f1_pedir, f2, f2_pedir, spacings):
         r""" Start off-resonance field estimation
         """
-        try_isotropic_ss = False
-        if try_isotropic_ss:
-            fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
-            self.f1_ss = IsotropicScaleSpace(f1,
-                                             self.subsampling,
-                                             self.fwhm / fwhm2sigma,
-                                             None,
-                                             spacings,
-                                             False)
-            self.f2_ss = IsotropicScaleSpace(f2,
-                                             self.subsampling,
-                                             self.fwhm / fwhm2sigma,
-                                             None,
-                                             spacings,
-                                             False)
         field = None
         b = None
         b_coeff = None
@@ -576,13 +572,18 @@ class OffResonanceFieldEstimator(object):
             f1_smooth = self.f1_ss.get_image(scale)
             aff = AffineMap(None, shape1, affine1, f1.shape, f1_affine)
             current1 = aff.transform(f1_smooth)
+            current1_mask = (aff.transform(f1>0)).astype(np.int32)
 
             # Resample second image
+            # In the EPI vs. Non-EPI case, this is the non-epi image,
+            # which is going to be rigidly aligned towards f1
             shape2 = self.f2_ss.get_domain_shape(scale)
             affine2 = self.f2_ss.get_affine(scale)
             f2_smooth = self.f2_ss.get_image(scale)
-            aff = AffineMap(None, shape2, affine2, f2.shape, f2_affine)
+            # We must warp f2 towards [shape1, affine1]
+            aff = AffineMap(None, shape1, affine1, f2.shape, f2_affine)
             current2 = aff.transform(f2_smooth)
+            current2_mask = (aff.transform(f2>0)).astype(np.int32)
 
             self.images.append([current1, current2])
             #continue
@@ -636,7 +637,10 @@ class OffResonanceFieldEstimator(object):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
 
                 energy, grad = self.distortion_model.energy_and_gradient(
-                            current1, f1_pedir, current2, f2_pedir, field)
+                            current1, f1_pedir, current2, f2_pedir, field,
+                            current1_mask, current2_mask)
+                if energy is None or grad is None:
+                    break
                 grad = np.array(gr.unwrap_scalar_field(grad))
 
                 bending_energy, bending_grad = field.get_bending_gradient()
