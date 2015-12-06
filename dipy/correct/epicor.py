@@ -1,220 +1,664 @@
-from __future__ import print_function
 import numpy as np
-from numpy.testing import (assert_equal,
-                           assert_almost_equal,
-                           assert_array_equal,
-                           assert_array_almost_equal,
-                           assert_raises)
-import matplotlib.pyplot as plt
-import dipy.align.imwarp as imwarp
-import dipy.align.metrics as metrics
-import dipy.align.vector_fields as vfu
-from dipy.data import get_data
-from dipy.align import floating
-import nibabel as nib
-import nibabel.eulerangles as eulerangles
-from dipy.align.imwarp import DiffeomorphicMap
-from dipy.align import VerbosityLevels
-import dipy.viz.regtools as rt
+import numpy.linalg as npl
 import scipy as sp
-import scipy
-import scipy.sparse
-import scipy.sparse.linalg
 import dipy.correct.gradients as gr
+from dipy.align import expectmax as em
+from dipy.align import crosscorr as cc
+from dipy.align import vector_fields as vfu
+from dipy.align.imaffine import AffineMap
+from dipy.align.scalespace import IsotropicScaleSpace
+from dipy.correct.splines import CubicSplineField
+from dipy.correct.cc_splines import cc_splines_gradient_epicor
 
-def read_topup_field(fname):
-    fname = 'results_fieldcoef.nii'
-    coef_nib = nib.load(fname)
-    coef = coef_nib.get_data()
-    coef_shape = np.array(coef.shape)
-    h = coef_nib.get_header()
-    knot_spacings = np.round(np.array(h.get_zooms()) + 0.5).astype(np.int32)
-    vox_size = np.array([h._structarr['intent_p'+str(i + 1)] for i in range(3)])
-    vox_size = vox_size.astype(np.float64)
-    vol_shape = coef_nib.get_affine()[:3,3].astype(np.int32)
+floating = np.float64
 
-    sfield = gr.SplineField(vol_shape, knot_spacings)
-    sfield.copy_coefficients(coef.astype(np.float64))
-    vol = sfield.get_volume()
+class EPIDistortionModel(object):
+    pass
 
 
-
-def extend_volume(vol, margin):
-    dims = np.array(vol.shape)
-    dims += 2*margin
-    new_vol = np.zeros(tuple(dims))
-    new_vol[margin:-margin, margin:-margin, margin:-margin] = vol[...]
-    return new_vol
+class OppositeBlips_SSD(EPIDistortionModel):
+    pass
 
 
-up_nib = nib.load("b0_blipup.nii")
-down_nib = nib.load("b0_blipdown.nii")
-up = up_nib.get_data().squeeze().astype(np.float64)
-down = down_nib.get_data().squeeze().astype(np.float64)
+class OppositeBlips_CC(EPIDistortionModel):
+    def __init__(self,
+                 radius=4):
+        r""" OppositeBlips_CC
 
+        EPI distortion model based on the Normalized Cross Correlation
+        metric.
 
-use_extend_volume = True
-if use_extend_volume:
-    up = extend_volume(up, 16)
-    down = extend_volume(down, 16)
+        Parameters
+        ----------
+        radius : int (optional)
+            radius of the local window of the CC metric. Default is 4.
+        """
+        self.radius = radius
 
-#up_dir, up_spacings = imwarp.get_direction_and_spacings(up_nib.get_affine(), 3)
-#down_dir, down_spacings = imwarp.get_direction_and_spacings(down_nib.get_affine(), 3)
+    def energy_and_gradient(self, down, down_pedir, up, up_pedir, field):
+        current_shape = np.array(up.shape, dtype=np.int32)
+        b  = np.array(field.get_volume((0,0,0)))
+        b = b.astype(np.float64)
 
-# ====Simplify sampling transforms====
-up_dir, up_spacings = np.eye(4), np.ones(3)*1.8
-down_dir, down_spacings = np.eye(4), np.ones(3)*1.8
-up_affine = up_dir
-up_affine[:3, :3] *= 1.8
-up_affine_inv = np.linalg.inv(up_affine)
-down_affine = down_dir
-down_affine[:3, :3] *= 1.8
-down_affine_inv = np.linalg.inv(down_affine)
-# ====================================
+        db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
+        kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
+        dkernel = np.array(field.spline3d.get_kernel_grid((0,1,0)))
+        kspacing = field.kspacing
+        field_shape = field.grid_shape
+        kcoef_grad = np.zeros_like(field.coef)
 
-levels = 4
-ss_sigma_factor = 0.2
+        # Numerical derivatives of input images
+        dup = gr.der_y(up)
+        ddown = gr.der_y(down)
 
-up_ss = imwarp.ScaleSpace(up, levels, up_affine, up_spacings, ss_sigma_factor, False)
-down_ss = imwarp.ScaleSpace(down, levels, down_affine, down_spacings, ss_sigma_factor, False)
+        # Warp images and their derivatives
+        w_up, _m = gr.warp_with_orfield(up, b, up_pedir, None,
+                                        None, None, current_shape)
+        dw_up, _m = gr.warp_with_orfield(dup, b, up_pedir, None,
+                                         None, None, current_shape)
+        w_down, _m = gr.warp_with_orfield(down, b, down_pedir, None,
+                                          None, None, current_shape)
+        dw_down, _m = gr.warp_with_orfield(ddown, b, down_pedir,
+                                           None, None, None, current_shape)
 
-ref_shape = up_ss.get_domain_shape(levels-1)
-ref_affine = up_ss.get_affine(levels-1)
-ref_affine_inv = up_ss.get_affine_inv(levels-1)
-b = np.zeros(shape=tuple(ref_shape), dtype=floating)
-d_up = np.array([0, -1, 0], dtype=np.float64)
-d_down = np.array([0, 1, 0], dtype=np.float64)
-
-
-
-
-
-#one level
-#for level in range(levels-1, levels-4, -1):
-if True:
-    level = levels-1
-    current_up = up_ss.get_image(level)
-    current_down = down_ss.get_image(level)
-    dcurrent_up = gr.der_y(current_up)
-    dcurrent_down = gr.der_y(current_down)
-    print("Range up: %f %f"%(current_up.min(), current_up.max()))
-    print("Range down: %f %f"%(current_down.min(), current_down.max()))
-    print("Means:",current_up.mean(), current_down.mean())
-    #current_up *= 10.0/current_up.mean()
-    #current_down *= 10.0/current_down.mean()
-    print("New range up: %f %f"%(current_up.min(), current_up.max()))
-    print("New range down: %f %f"%(current_down.min(), current_down.max()))
-    #current_up/=10000.0
-    #current_down/=10000.0
-
-    if level<levels-1:
-        rt.plot_slices(b)
-        new_shape = up_ss.get_domain_shape(level)
-        factors = up_ss.get_expand_factors(level + 1, level)
-        new_b = gr.resample_orfield(b, factors, new_shape)
-
-        b = np.array(new_b)
-        ref_shape = new_shape
-        ref_affine = up_ss.get_affine(level)
-        ref_affine_inv = up_ss.get_affine_inv(level)
-        rt.plot_slices(b)
-
-    # warp up
-    S = ref_affine
-    Rinv = ref_affine_inv
-    Tinv = up_affine_inv
-
-    affine_idx_in = Rinv.dot(S)
-    affine_idx_out = Tinv.dot(S)
-    affine_disp = Tinv
-
-    # Warp down
-    S = ref_affine
-    Rinv = ref_affine_inv
-    Tinv = down_affine_inv
-
-    affine_idx_in = Rinv.dot(S)
-    affine_idx_out = Tinv.dot(S)
-    affine_disp = Tinv
-
-    l1 = 0.01
-    l2 = 0.01
-    max_iter = 2000
-    it = 0
-    epsilon = 0.000001
-    nrm = 1 + epsilon
-    energy = None
-    prev_energy=None
-
-    test_holland_hessian = True
-    if test_holland_hessian:
-        w_up = gr.warp_with_orfield(current_up, b, d_up, affine_idx_in, affine_idx_out,
-                                    affine_disp, ref_shape)
-        w_down = gr.warp_with_orfield(current_down, b, d_down, affine_idx_in, affine_idx_out,
-                                      affine_disp, ref_shape)
+        dw_up = gr.der_y(w_up)
+        dw_down = gr.der_y(w_down)
+        # Convert to numpy arrays
         w_up = np.array(w_up)
         w_down = np.array(w_down)
+        dw_up = np.array(dw_up)
+        dw_down = np.array(dw_down)
+        pedir_factor = up_pedir[1]
 
-        dw_up = gr.warp_with_orfield(dcurrent_up, b, d_up, affine_idx_in, affine_idx_out,
-                                     affine_disp, ref_shape)
-        dw_down = gr.warp_with_orfield(dcurrent_down, b, d_down, affine_idx_in, affine_idx_out,
-                                       affine_disp, ref_shape)
-        db = np.array(gr.der_y(b))
-
-        Jth, data, indices, indptr = gr.gauss_newton_system_holland(w_up, w_down, dw_up, dw_down, db, l1, l2)
-        Jth = np.array(Jth)
-        data = np.array(data)
-        indices = np.array(indices)
-        indptr = np.array(indptr)
-
-        JtJ = sp.sparse.csr_matrix((data, indices, indptr), shape=(w_up.size, w_up.size))
-        x = sp.sparse.linalg.spsolve(JtJ, -1.0*Jth)
-        step = gr.wrap_scalar_field(x, np.array(w_up.shape, dtype=np.int32))
-        step = np.array(step)
-        b += step
-
-        rt.overlay_slices(w_up*(1+db), w_down*(1-db), slice_type=2)
-
-        #Jth_test, JtJ_test = gr.test_gauss_newton_holland(w_up, w_down, dw_up, dw_down, db, l1, l2)
-        #dd = np.abs(JtJ - JtJ_test)
-        #dd.max()
+        # This should consider more general PE directions, but for now
+        # it assumes it's along the y axis
+        energy = cc_splines_gradient_epicor(w_down, w_up, dw_down, dw_up,
+                                            pedir_factor,
+                                            None, None, kernel, dkernel,
+                                            db, kspacing, field_shape,
+                                            self.radius, kcoef_grad)
+        return energy, kcoef_grad
 
 
-    while it<max_iter and nrm > epsilon:# and (prev_energy is None or prev_energy>=energy):
-        w_up = gr.warp_with_orfield(current_up, b, d_up, affine_idx_in, affine_idx_out,
-                                    affine_disp, ref_shape)
-        w_down = gr.warp_with_orfield(current_down, b, d_down, affine_idx_in, affine_idx_out,
-                                      affine_disp, ref_shape)
-        w_up = np.array(w_up)
-        w_down = np.array(w_down)
+class SingleEPI_CC(EPIDistortionModel):
+    def __init__(self,
+                 radius=4):
+        r""" SingleEPI_CC
+        """
+        self.radius = radius
 
-        dw_up = gr.warp_with_orfield(dcurrent_up, b, d_up, affine_idx_in, affine_idx_out,
-                                     affine_disp, ref_shape)
-        dw_down = gr.warp_with_orfield(dcurrent_down, b, d_down, affine_idx_in, affine_idx_out,
-                                       affine_disp, ref_shape)
-        db = np.array(gr.der_y(b))
-
-        gh = np.array(gr.grad_holland(w_up, w_down, dw_up, dw_down, b, db, l1, l2))
+    def energy_and_gradient(self, down, down_pedir, up, up_pedir, field):
+        return None
 
 
-        #w_up *= ( 1.0 - db)
-        #w_down *= ( 1.0 + db)
+class SingleEPI_ECC(EPIDistortionModel):
+    def __init__(self, radius=4, q_levels=256):
+        r""" SingleEPI_ECC
+        """
+        self.radius = radius
+        self.q_levels = q_levels
 
-        prev_energy = energy
-        energy = np.sum((w_up - w_down)**2)
-        #if prev_energy is not None:
-        #    print("Decreased energy:%f", prev_energy - energy)
+        self.static_image_mask = None
+        self.moving_image_mask = None
+        self.staticq_means_field = None
+        self.movingq_means_field = None
+        self.movingq_levels = None
+        self.staticq_levels = None
 
-        nrm = np.abs(gh).max()
-        print("Level: %d. Iter: %d/%d. Grad norm: %f. Energy: %f"%(level, it+1, max_iter, nrm,energy))
+        self.precompute_factors = cc.precompute_cc_factors_3d
+        self.compute_forward_step = cc.compute_cc_forward_step_3d
+        self.compute_backward_step = cc.compute_cc_backward_step_3d
+        self.reorient_vector_field = vfu.reorient_vector_field_3d
+        self.quantize = em.quantize_positive_3d
+        self.compute_stats = em.compute_masked_class_stats_3d
 
-        if it % 200 == 0:
-            rt.overlay_slices(w_up, w_down, slice_type=2)
+    def initialize_iteration(self):
+        r"""
+        Pre-computes the cross-correlation factors
+        """
+        ##################################################
+        #Estimate the hidden variables (EM-initialization)
+        ##################################################
+        #Use only the foreground intersection for estimation
+        sampling_mask = np.array(self.static_image_mask*self.moving_image_mask, dtype = np.int32)
+        self.sampling_mask = sampling_mask
 
-        tau = 0.1
-        if nrm > tau:
-            gh = gh * (tau / nrm)
-        b -= gh
+        #Process the Static image quantization
+        staticq, self.staticq_levels, hist = self.quantize(self.static_image,
+                                                           self.q_levels)
+        staticq = np.array(staticq, dtype=np.int32)
+        self.staticq_levels = np.array(self.staticq_levels)
+        staticq_means, staticq_variances = self.compute_stats(sampling_mask,
+                                                              self.moving_image,
+                                                              self.q_levels,
+                                                              staticq)
+        staticq_means[0] = 0
+        self.staticq_means = np.array(staticq_means)
+        self.staticq_variances = np.array(staticq_variances)
+        self.staticq_variances[np.isinf(self.staticq_variances)] = self.staticq_variances.max()
+        self.staticq_sigma_sq_field = self.staticq_variances[staticq]
+        self.staticq_means_field = self.staticq_means[staticq]
 
-        it +=1
-    rt.overlay_slices(w_up, w_down, slice_type=2)
+        #Process the Moving image quantization
+        movingq, self.movingq_levels, hist = self.quantize(self.moving_image,
+                                                           self.q_levels)
+        movingq = np.array(movingq, dtype=np.int32)
+        self.movingq_levels = np.array(self.movingq_levels)
+        movingq_means, movingq_variances = self.compute_stats(
+            sampling_mask, self.static_image, self.q_levels, movingq)
+        movingq_means[0] = 0
+        self.movingq_means = np.array(movingq_means)
+        self.movingq_variances = np.array(movingq_variances)
+        self.movingq_variances[np.isinf(self.movingq_variances)] = self.movingq_variances.max()
+        self.movingq_sigma_sq_field = self.movingq_variances[movingq]
+        self.movingq_means_field = self.movingq_means[movingq]
+
+        ##################################################
+        #Compute the CC factors (CC-initialization)
+        ##################################################
+        only_one_modality = False
+        if only_one_modality:
+            #Compare the goodness of fit
+            staticq_mse = np.sum((self.staticq_means_field - self.moving_image)**2, -1).mean()
+            movingq_mse = np.sum((self.movingq_means_field - self.static_image)**2, -1).mean()
+
+            if staticq_mse < movingq_mse:
+                self.staticq_factors = self.precompute_factors(self.staticq_means_field,
+                                                 self.moving_image,
+                                                 self.radius)
+                self.movingq_factors = self.staticq_factors
+                #print('Staticq selected')
+            else:
+                self.movingq_factors = self.precompute_factors(self.static_image,
+                                                 self.movingq_means_field,
+                                                 self.radius)
+                self.staticq_factors = self.movingq_factors
+                #print('Movingq selected')
+        else:
+            self.staticq_factors = self.precompute_factors(self.staticq_means_field,
+                                                 self.moving_image,
+                                                 self.radius)
+            self.movingq_factors = self.precompute_factors(self.static_image,
+                                                 self.movingq_means_field,
+                                                 self.radius)
+
+        self.staticq_factors = np.array(self.staticq_factors)
+        self.movingq_factors = np.array(self.movingq_factors)
+
+        ##################################################
+        #Compute the gradients (common initialization)
+        ##################################################
+        if only_one_modality:
+            if staticq_mse < movingq_mse: #choose staticq_means_field as static
+                self.gradient_moving = np.empty(
+                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.moving_image)):
+                    self.gradient_moving[..., i] = grad
+
+                self.gradient_static = np.empty(
+                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.staticq_means_field)):
+                    self.gradient_static[..., i] = grad
+            else: #choose movingq_means_field as moving
+                self.gradient_moving = np.empty(
+                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.movingq_means_field)):
+                    self.gradient_moving[..., i] = grad
+
+                self.gradient_static = np.empty(
+                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+                for i, grad in enumerate(sp.gradient(self.static_image)):
+                    self.gradient_static[..., i] = grad
+        else:
+            self.gradient_moving = np.empty(
+                    shape=(self.moving_image.shape)+(self.dim,), dtype=floating)
+            for i, grad in enumerate(sp.gradient(self.moving_image)):
+                self.gradient_moving[..., i] = grad
+
+            self.gradient_static = np.empty(
+                    shape=(self.static_image.shape)+(self.dim,), dtype=floating)
+            for i, grad in enumerate(sp.gradient(self.static_image)):
+                self.gradient_static[..., i] = grad
+        #Convert the moving image's gradient field from voxel to physical space
+        if self.moving_spacing is not None:
+            self.gradient_moving /= self.moving_spacing
+        if self.moving_direction is not None:
+            self.reorient_vector_field(self.gradient_moving,
+                                       self.moving_direction)
+
+        #Convert the moving image's gradient field from voxel to physical space
+        if self.static_spacing is not None:
+            self.gradient_static /= self.static_spacing
+        if self.static_direction is not None:
+            self.reorient_vector_field(self.gradient_static,
+                                       self.static_direction)
+
+    def energy_and_gradient(self, epi, pedir, non_epi, field):
+
+        return None
+
+
+class OffResonanceFieldEstimator(object):
+    def __init__(self,
+                 distortion_model,
+                 level_iters=None,
+                 subsampling=None,
+                 warp_res=None,
+                 fwhm=None,
+                 lambdas=None,
+                 step_lengths=None):
+        r""" OffResonanceFieldEstimator
+
+        Estimates the off-resonance field causing geometric distortions and
+        intensity modulations on echo-planar images.
+
+        Parameters
+        ----------
+        distortion_model : object derived from EPIDistortionModel
+            an object defining the similarity measure used for estimation
+            of the off-resonance field
+        level_iters : sequence of ints (optional)
+            the maximum number of iteration per stage. If None (default),
+            the level iters are set to [200, 100, 50, 25, 12, 10, 10, 5, 5]
+        subsampling : sequence of ints (optional)
+            subsampling factor in each resolution. If None (default),
+            the subsampling factors are set to [2, 2, 2, 2, 2, 1, 1, 1, 1]
+        warp_res : sequence of floats (optional)
+            separation (in millimeters) between the spline knots
+            parameterizing the off-resonance field in each resolution
+            stage. If Nont (default), the separations are set to
+            [20, 16, 14, 12, 10, 6, 4, 4, 4]
+        fwhm : sequence of floats (optional)
+            full width at half magnitude of the smoothing kernel used at
+            each resolution. If None (default), the smoothig parameters
+            are set to [8, 6, 4, 3, 3, 2, 1, 0, 0].
+        lambdas : sequence of floats (optional)
+            regularization parameter of the thin-plate spline model per
+            stage. If None (default), the regularization parameters are set
+            to
+            [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.005, 0.0005]
+        step_lengths : sequence of floats
+            the step length in the gradient descent optimization for each
+            resolution. The step length is the maximum spline coefficient
+            variation at each iteration
+        """
+        self.distortion_model = distortion_model
+        if level_iters is None:
+            level_iters = [100, 50, 50, 25, 100, 50, 25, 15, 10]
+        if subsampling is None:
+            subsampling = [2, 2, 2, 2, 2, 1, 1, 1, 1]
+        if warp_res is None:
+            warp_res = [20, 16, 14, 12, 10, 6, 4, 4, 4]
+        if fwhm is None:
+            fwhm = [8, 6, 4, 3, 3, 2, 1, 0, 0]
+        if lambdas is None:
+            lambdas = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                       0.5, 0.5, 0.05]
+        if step_lengths is None:
+            step_lengths = [0.2, 0.2, 0.2, 0.2, 0.2,
+                            0.35, 0.35, 0.35, 0.35]
+        self._set_multires_params(level_iters, subsampling, warp_res,
+                                  fwhm, lambdas, step_lengths)
+        self.energy_list = []
+        self.energy_window = 12
+
+    def _approximate_derivative_direct(self, x, y):
+        r"""Derivative of the degree-2 polynomial fit of the given x, y pairs
+
+        Directly computes the derivative of the least-squares-fit quadratic
+        function estimated from (x[...],y[...]) pairs.
+
+        Parameters
+        ----------
+        x : array, shape (n,)
+            increasing array representing the x-coordinates of the points to
+            be fit
+        y : array, shape (n,)
+            array representing the y-coordinates of the points to be fit
+
+        Returns
+        -------
+        y0 : float
+            the estimated derivative at x0 = 0.5*len(x)
+        """
+        x = np.asarray(x)
+        y = np.asarray(y)
+        X = np.row_stack((x**2, x, np.ones_like(x)))
+        XX = (X).dot(X.T)
+        b = X.dot(y)
+        beta = npl.solve(XX, b)
+        x0 = 0.5 * len(x)
+        y0 = 2.0 * beta[0] * (x0) + beta[1]
+        return y0
+
+
+    def _get_energy_derivative(self):
+        r"""Approximate derivative of the energy profile
+
+        Returns the derivative of the estimated energy as a function of "time"
+        (iterations) at the last iteration
+        """
+        n_iter = len(self.energy_list)
+        if n_iter < self.energy_window:
+            raise ValueError('Not enough data to fit the energy profile')
+        x = range(self.energy_window)
+        y = self.energy_list[(n_iter - self.energy_window):n_iter]
+        ss = sum(y)
+        if(ss > 0):
+            ss *= -1
+        y = [v / ss for v in y]
+        der = self._approximate_derivative_direct(x, y)
+        return der
+
+    def _set_nstages_from_sequence(self, seq):
+        r""" Sets the number of stages of the multiresolution strategy
+
+        Verifies that the length of the array is consistent with the
+        number of stages previously set.
+
+        Parameters
+        ----------
+        seq : sequence
+            the number of stages will be set as the length of the sequence.
+            If None, the number of stages is set to None. If the number of
+            stages previously set is not None and it's different from the
+            length of the sequence then an exception is raised (the input
+            sequence is considered inconsistent with some previously set
+            sequence).
+        """
+        if seq is None:
+            self.nstages = None
+        elif self.nstages is None:
+            self.nstages = len(seq)
+        elif self.nstages != len(seq):
+            raise ValueError('Inconsistent multiresolution settings')
+
+    def _set_multires_params(self, level_iters=None, subsampling=None,
+                             warp_res=None, fwhm=None, lambdas=None,
+                             step_lengths=None):
+        r""" Verify that the multi-resolution parameters are consistent
+
+        Parameters
+        ----------
+        level_iters : sequence of ints (optional)
+            the maximum number of iteration per stage. If None (default),
+            the previous sequence is left unchanged.
+        subsampling : sequence of ints
+            subsampling factor in each resolution. If None (default),
+            the previous sequence is left unchanged.
+        warp_res : sequence of floats
+            separation (in millimeters) between the spline knots
+            parameterizing the off-resonance field in each resolution
+            stage. If None (default), the previous sequence is left
+            unchanged.
+        fwhm : sequence of floats
+            full width at half magnitude of the smoothing kernel used at
+            each resolution. If None (default), the previous sequence is
+            left unchanged.
+        lambdas : sequence of floats
+            regularization parameter of the thin-plate spline model per
+            stage. If None (default), the previous sequence is left
+            unchanged.
+        """
+        self._set_nstages_from_sequence(None)
+        if level_iters is not None:
+            self.level_iters = np.copy(level_iters)
+        self._set_nstages_from_sequence(self.level_iters)
+        if subsampling is not None:
+            self.subsampling = np.copy(subsampling)
+        self._set_nstages_from_sequence(self.subsampling)
+        if warp_res is not None:
+            self.warp_res = np.copy(warp_res)
+        self._set_nstages_from_sequence(self.warp_res)
+        if fwhm is not None:
+            self.fwhm = np.copy(fwhm)
+        self._set_nstages_from_sequence(self.fwhm)
+        if lambdas is not None:
+            self.lambdas = np.copy(lambdas)
+        self._set_nstages_from_sequence(self.lambdas)
+        if step_lengths is not None:
+            self.step_lengths = np.copy(step_lengths)
+        self._set_nstages_from_sequence(self.step_lengths)
+
+    def optimize(self, f1, f1_pedir, f2, f2_pedir, spacings):
+        r""" Start off-resonance field estimation
+        """
+        try_isotropic_ss = False
+        if try_isotropic_ss:
+            fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+            self.f1_ss = IsotropicScaleSpace(f1,
+                                             self.subsampling,
+                                             self.fwhm / fwhm2sigma,
+                                             None,
+                                             spacings,
+                                             False)
+            self.f2_ss = IsotropicScaleSpace(f2,
+                                             self.subsampling,
+                                             self.fwhm / fwhm2sigma,
+                                             None,
+                                             spacings,
+                                             False)
+        field = None
+        b = None
+        b_coeff = None
+        self.fields = []
+        self.images = []
+        for stage in range(self.nstages):
+            step_length = self.step_lengths[stage]
+            print("Stage: %d / %d"%(stage + 1, self.nstages))
+            if self.subsampling[stage] > 1:
+                sub1 = vfu.downsample_scalar_field_3d(f1)
+                sub2 = vfu.downsample_scalar_field_3d(f2)
+            else:
+                sub1 = f1
+                sub2 = f2
+
+            resampled_sp = self.subsampling[stage] * spacings
+            tps_lambda = self.lambdas[stage]
+
+            # get the spline resolution from millimeters to voxels
+            kspacing = np.round(self.warp_res[stage]/resampled_sp)
+            kspacing = kspacing.astype(np.int32)
+            kspacing[kspacing < 1] = 1
+
+            # Scale space smoothing sigma
+            sigma_mm = self.fwhm[stage] / (np.sqrt(8.0 * np.log(2)))
+            sigma_vox = sigma_mm/resampled_sp
+            print(">>>kspacing:",kspacing)
+            print(">>>resampled_sp:",resampled_sp)
+            print(">>>sigma_vox:",sigma_vox)
+
+            # Create, rescale or keep field as needed
+            if field is None:
+                # The field has not been created, this must be the first stage
+                print ("Creating field")
+                field = CubicSplineField(sub1.shape, kspacing)
+                b_coeff = np.zeros(field.num_coefficients())
+                field.copy_coefficients(b_coeff)
+            elif (not np.all(sub1.shape == field.vol_shape) or
+                  not np.all(kspacing == field.kspacing)):
+                b = field.get_volume()
+                # We need to reshape the field
+                new_field = CubicSplineField(sub1.shape, kspacing)
+                resample_affine = (self.subsampling[stage] * np.eye(4) /
+                                   self.subsampling[stage-1])
+                resample_affine[3,3] = 1.0
+                print ("Resampling field:",resample_affine)
+                new_b = vfu.transform_3d_affine(b.astype(np.float64),
+                                                np.array(sub1.shape, dtype=np.int32),
+                                                resample_affine)
+                new_b = np.array(new_b, dtype=np.float64)
+                # Scale to new voxel size
+                new_b *= ((1.0 * self.subsampling[stage-1]) /
+                          self.subsampling[stage])
+                # Compute the coefficients associated with the resampled field
+                coef = new_field.spline3d.fit_to_data(new_b, 0.0)
+                new_field.copy_coefficients(coef)
+                field = new_field
+                b_coeff = gr.unwrap_scalar_field(coef)
+            else:
+                print ("Keeping field as is")
+
+            # smooth out images and compute spatial derivatives
+            current1 = sp.ndimage.filters.gaussian_filter(sub1, sigma_vox)
+            current2 = sp.ndimage.filters.gaussian_filter(sub2, sigma_vox)
+            self.images.append([current1, current2])
+            #continue
+            #rt.overlay_slices(current1, current2, slice_type=2)
+            #current1 = self.f1_ss.get_image(self.nstages - 1 - stage)
+            #current2 = self.f2_ss.get_image(self.nstages - 1 - stage)
+
+            # Start gradient descent
+            self.energy_list = []
+            tolerance = 1e-6
+            for it in range(self.level_iters[stage]):
+                print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
+
+                energy, grad = self.distortion_model.energy_and_gradient(
+                            current1, f1_pedir, current2, f2_pedir, field)
+                grad = np.array(gr.unwrap_scalar_field(grad))
+
+                bending_energy, bending_grad = field.get_bending_gradient()
+                bending_grad = tps_lambda * np.array(bending_grad)
+
+                bending_energy *= tps_lambda
+                total_energy = energy + bending_energy
+                self.energy_list.append(total_energy)
+                #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
+                step = -1 * (grad + bending_grad)
+                step = step_length * (step/np.abs(step).max())
+                if b_coeff is None:
+                    b_coeff = step
+                else:
+                    b_coeff += step
+                field.copy_coefficients(b_coeff)
+                if len(self.energy_list)>=self.energy_window:
+                    der = self._get_energy_derivative()
+                    if der < tolerance:
+                        break
+                else:
+                    der = np.inf
+                print("Energy: %f. [%f]"%(total_energy, der))
+            self.fields.append(field.get_volume())
+        return field
+
+
+    def optimize_with_ss(self, f1, f1_affine, f1_pedir,
+                               f2, f2_affine, f2_pedir,
+                               spacings):
+        fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+        self.f1_ss = IsotropicScaleSpace(f1,
+                                         self.subsampling,
+                                         self.fwhm / fwhm2sigma,
+                                         f1_affine,
+                                         spacings,
+                                         False)
+        self.f2_ss = IsotropicScaleSpace(f2,
+                                         self.subsampling,
+                                         self.fwhm / fwhm2sigma,
+                                         f2_affine,
+                                         spacings,
+                                         False)
+
+        field = None
+        b = None
+        b_coeff = None
+        self.fields = []
+        self.images = []
+        for stage in range(self.nstages):
+            scale = self.nstages - 1 - stage
+            step_length = self.step_lengths[stage]
+            print("Stage: %d / %d"%(stage + 1, self.nstages))
+
+            # Resample first image
+            shape1 = self.f1_ss.get_domain_shape(scale)
+            affine1 = self.f1_ss.get_affine(scale)
+            f1_smooth = self.f1_ss.get_image(scale)
+            aff = AffineMap(None, shape1, affine1, f1.shape, f1_affine)
+            current1 = aff.transform(f1_smooth)
+
+            # Resample second image
+            shape2 = self.f2_ss.get_domain_shape(scale)
+            affine2 = self.f2_ss.get_affine(scale)
+            f2_smooth = self.f2_ss.get_image(scale)
+            aff = AffineMap(None, shape2, affine2, f2.shape, f2_affine)
+            current2 = aff.transform(f2_smooth)
+
+            self.images.append([current1, current2])
+            #continue
+
+            resampled_sp = self.subsampling[stage] * spacings
+            tps_lambda = self.lambdas[stage]
+
+            # get the spline resolution from millimeters to voxels
+            kspacing = np.round(self.warp_res[stage]/resampled_sp)
+            kspacing = kspacing.astype(np.int32)
+            kspacing[kspacing < 1] = 1
+
+            # Scale space smoothing sigma
+            print(">>>kspacing:",kspacing)
+            print(">>>resampled_sp:",resampled_sp)
+            # Create, rescale or keep field as needed
+            if field is None:
+                # The field has not been created, this must be the first stage
+                print("Creating field")
+                field = CubicSplineField(current1.shape, kspacing)
+                b_coeff = np.zeros(field.num_coefficients())
+                field.copy_coefficients(b_coeff)
+            elif (not np.all(current1.shape == field.vol_shape) or
+                  not np.all(kspacing == field.kspacing)):
+                b = field.get_volume()
+                # We need to reshape the field
+                new_field = CubicSplineField(current1.shape, kspacing)
+                resample_affine = (self.subsampling[stage] * np.eye(4) /
+                                   self.subsampling[stage-1])
+                resample_affine[3,3] = 1.0
+                print ("Resampling field:",resample_affine)
+                new_b = vfu.transform_3d_affine(b.astype(np.float64),
+                                                np.array(current1.shape, dtype=np.int32),
+                                                resample_affine)
+                new_b = np.array(new_b, dtype=np.float64)
+                # Scale to new voxel size
+                new_b *= ((1.0 * self.subsampling[stage-1]) /
+                          self.subsampling[stage])
+                # Compute the coefficients associated with the resampled field
+                coef = new_field.spline3d.fit_to_data(new_b, 0.0)
+                new_field.copy_coefficients(coef)
+                field = new_field
+                b_coeff = gr.unwrap_scalar_field(coef)
+            else:
+                print ("Keeping field as is")
+
+            # Start gradient descent
+            self.energy_list = []
+            tolerance = 1e-6
+            for it in range(self.level_iters[stage]):
+                print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
+
+                energy, grad = self.distortion_model.energy_and_gradient(
+                            current1, f1_pedir, current2, f2_pedir, field)
+                grad = np.array(gr.unwrap_scalar_field(grad))
+
+                bending_energy, bending_grad = field.get_bending_gradient()
+                bending_grad = tps_lambda * np.array(bending_grad)
+
+                bending_energy *= tps_lambda
+                total_energy = energy + bending_energy
+                self.energy_list.append(total_energy)
+                #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
+                step = -1 * (grad + bending_grad)
+                step = step_length * (step/np.abs(step).max())
+                if b_coeff is None:
+                    b_coeff = step
+                else:
+                    b_coeff += step
+                field.copy_coefficients(b_coeff)
+                if len(self.energy_list)>=self.energy_window:
+                    der = self._get_energy_derivative()
+                    if der < tolerance:
+                        break
+                else:
+                    der = np.inf
+                print("Energy: %f. [%f]"%(total_energy, der))
+            self.fields.append(field.get_volume())
+        return field

@@ -3,7 +3,14 @@
 import numpy as np
 cimport cython
 cimport numpy as cnp
+from dipy.align.transforms cimport (Transform)
 from fused_types cimport floating
+from dipy.align.vector_fields cimport(_apply_affine_3d_x0,
+                                      _apply_affine_3d_x1,
+                                      _apply_affine_3d_x2,
+                                      _apply_affine_2d_x0,
+                                      _apply_affine_2d_x1)
+
 
 
 cdef inline int _int_max(int a, int b) nogil:
@@ -799,3 +806,198 @@ def precompute_cc_factors_3d(floating[:, :, :] static, floating[:, :, :] moving,
                         factors[ss, rr, cc, 3] = Isq
                         factors[ss, rr, cc, 4] = Jsq
     return factors
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+cdef inline void compute_coefficients(int s, int r, int c,
+                                      floating[:,:,:] static,
+                                      floating[:,:,:] moving,
+                                      floating[:,:,:,:] factors,
+                                      double[:] out)nogil:
+    cdef:
+        double mu, nu, A, B, C
+    mu = static[s, r, c] - factors[s, r, c, 0]
+    nu = moving[s, r, c] - factors[s, r, c, 1]
+    A = factors[s, r, c, 2]
+    B = factors[s, r, c, 3]
+    C = factors[s, r, c, 4]
+    if(B * C * C > 1e-5):
+        out[0] = (2.0 * A) / (B * C)
+        out[1] = out[0] * mu
+        out[2] = out[0] * (A / C)
+        out[3] = out[2] * nu
+    else:
+        out[0] = 0
+        out[1] = 0
+        out[2] = 0
+        out[3] = 0
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def cc_val_and_grad(floating[:,:,:] static,
+                    floating[:,:,:] moving,
+                    floating[:, :, :, :] grad_moving,
+                    double[:,:] grid2world,
+                    floating[:, :, :, :] factors,
+                    Transform transform,
+                    double[:] theta,
+                    cnp.npy_intp radius,
+                    int compute_grad):
+    r"""Gradient of the local CC functional w.r.t. parameters
+    Computes the gradient of the local Cross Correlation functional w.r.t.
+    the parameters of `transform`
+    Parameters
+    ----------
+    grad_moving : array, shape (S, R, C, 3)
+        the gradient of the moving volume evaluated at grid-points of the
+        static image
+    grid2world : array, shape (3, 3)
+        the grid-to-space transform associated with the `grad_moving`'s grid
+    factors : array, shape (S, R, C, 5)
+        the precomputed cross correlation terms obtained via
+        precompute_cc_factors_3d
+    transform : instance of Transform
+        the transformation with respect to whose parameters the gradient
+        must be computed
+    theta : array, shape (n,)
+        parameters of the transformation to compute the gradient from
+    radius : int
+        the radius of the neighborhood used for the CC metric when
+        computing the factors. The returned vector field will be
+        zero along a boundary of width radius voxels.
+    Returns
+    -------
+    out : array, shape (n,)
+        the gradient of the cross correlation metric with respect to
+        parameters of the implicitly specified transform
+    energy : the cross correlation energy (data term) at this iteration
+    """
+    ftype = np.asarray(grad_moving).dtype
+    cdef:
+        cnp.npy_intp ns = grad_moving.shape[0]
+        cnp.npy_intp nr = grad_moving.shape[1]
+        cnp.npy_intp nc = grad_moving.shape[2]
+        cnp.npy_intp s, r, c, ps, pr, pc, n, i, j, side, constant_jacobian=0
+        double Ii, Ji, sfm, sff, smm, factor, local, energy = 0
+        double[:,:,:,:] coeffs = None
+        double[:] tmp = None
+        double[:] x = None
+        double[:,:] J = None
+        double[:] h = None
+        double[:] out = None
+
+    if compute_grad==1:
+        n = transform.number_of_parameters
+        coeffs = np.zeros((ns, nr, nc, 4), dtype=np.float64)
+        tmp = np.zeros((4,), dtype=np.float64)
+        x = np.empty(shape=(3,), dtype=np.float64)
+        J = np.zeros((3, n), dtype=np.float64)
+        h = np.zeros(n, dtype=np.float64)
+        out = np.zeros(n, dtype=np.float64)
+
+    side = 2 * radius + 1
+    with nogil:
+        for s in range(ns):
+            for r in range(nr):
+                for c in range(nc):
+                    # Compute local energy at (s,r,c)
+                    Ii = factors[s, r, c, 0]
+                    Ji = factors[s, r, c, 1]
+                    sfm = factors[s, r, c, 2]
+                    sff = factors[s, r, c, 3]
+                    smm = factors[s, r, c, 4]
+                    local = 0
+                    if(sff * smm > 1e-5):
+                        local = sfm * sfm / (sff * smm)
+
+                    if compute_grad == 0:
+                        energy += local
+                        continue
+
+                    # New corner
+                    compute_coefficients(s, r, c, static, moving, factors, tmp)
+                    for i in range(4):
+                        coeffs[s,r,c,i] = tmp[i]
+                    # Add signed sub-volumes
+                    if s>0:
+                        for i in range(4):
+                            coeffs[s, r, c,i] += coeffs[s-1,r,c,i]
+                        if r>0:
+                            for i in range(4):
+                                coeffs[s,r,c,i] -= coeffs[s-1,r-1,c,i]
+                            if c>0:
+                                for i in range(4):
+                                    coeffs[s,r,c,i] += coeffs[s-1,r-1,c-1,i]
+                        if c>0:
+                            for i in range(4):
+                                coeffs[s,r,c,i] -= coeffs[s-1,r,c-1,i]
+                    if r>0:
+                        for i in range(4):
+                            coeffs[s, r, c, i] += coeffs[s,r-1,c,i]
+                        if c>0:
+                            for i in range(4):
+                                coeffs[s, r, c,i] -= coeffs[s,r-1,c-1,i]
+                    if c>0:
+                        for i in range(4):
+                            coeffs[s, r, c,i] += coeffs[s,r,c-1,i]
+                    # Add signed corners
+                    if s>=side:
+                        compute_coefficients(s-side, r, c, static, moving, factors, tmp)
+                        for i in range(4):
+                            coeffs[s,r,c,i] -= tmp[i]
+                        if r>=side:
+                            compute_coefficients(s-side, r-side, c, static, moving, factors, tmp)
+                            for i in range(4):
+                                coeffs[s,r,c,i] += tmp[i]
+                            if c>=side:
+                                compute_coefficients(s-side, r-side, c-side, static, moving, factors, tmp)
+                                for i in range(4):
+                                    coeffs[s,r,c,i] -= tmp[i]
+                        if c>=side:
+                            compute_coefficients(s-side, r, c-side, static, moving, factors, tmp)
+                            for i in range(4):
+                                coeffs[s,r,c,i] += tmp[i]
+                    if r>=side:
+                        compute_coefficients(s, r-side, c, static, moving, factors, tmp)
+                        for i in range(4):
+                            coeffs[s,r,c,i] -= tmp[i]
+                        if c>=side:
+                            compute_coefficients(s, r-side, c-side, static, moving, factors, tmp)
+                            for i in range(4):
+                                coeffs[s,r,c,i] += tmp[i]
+                    if c>=side:
+                        compute_coefficients(s, r, c-side, static, moving, factors, tmp)
+                        for i in range(4):
+                            coeffs[s,r,c,i] -= tmp[i]
+
+                    if s<radius or r<radius or c<radius:
+                        continue
+
+                    energy += local
+                    # Accumulate gradient at (s,r,c)
+                    ps = s-radius
+                    pr = r-radius
+                    pc = c-radius
+                    x[0] = _apply_affine_3d_x0(ps, pr, pc, 1, grid2world)
+                    x[1] = _apply_affine_3d_x1(ps, pr, pc, 1, grid2world)
+                    x[2] = _apply_affine_3d_x2(ps, pr, pc, 1, grid2world)
+                    if constant_jacobian == 0:
+                        constant_jacobian = transform._jacobian(theta, x, J)
+
+                    for j in range(n):
+                        h[j] = 0
+                        for i in range(3):
+                            h[j] += grad_moving[ps, pr, pc, i] * J[i,j]
+
+                    factor = (static[ps,pr,pc] * coeffs[s,r,c,0] -
+                              coeffs[s,r,c,1] -
+                              moving[ps,pr,pc] * coeffs[s,r,c,2] +
+                              coeffs[s,r,c,3])
+
+                    for j in range(n):
+                        out[j] += h[j] * factor
+    return out, energy
