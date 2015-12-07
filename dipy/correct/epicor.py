@@ -37,11 +37,14 @@ class OppositeBlips_CC(EPIDistortionModel):
         """
         self.radius = radius
 
-    def energy_and_gradient(self, down, down_pedir, up, up_pedir, field,
+    def energy_and_gradient(self,
+                            down, down_grid2world, down_pedir,
+                            up, up_grid2world, up_pedir,
+                            field, field_grid2world,
                             mask_down=None, mask_up=None):
-        current_shape = np.array(up.shape, dtype=np.int32)
         b  = np.array(field.get_volume((0,0,0)))
         b = b.astype(np.float64)
+        current_shape = np.array(b.shape, dtype=np.int32)
 
         db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
         kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
@@ -50,20 +53,19 @@ class OppositeBlips_CC(EPIDistortionModel):
         field_shape = field.grid_shape
         kcoef_grad = np.zeros_like(field.coef)
 
-        # Numerical derivatives of input images
-        dup = gr.der_y(up)
-        ddown = gr.der_y(down)
-
         # Warp images and their derivatives
-        w_up, _m = gr.warp_with_orfield(up, b, up_pedir, None,
-                                        None, None, current_shape)
-        dw_up, _m = gr.warp_with_orfield(dup, b, up_pedir, None,
-                                         None, None, current_shape)
-        w_down, _m = gr.warp_with_orfield(down, b, down_pedir, None,
-                                          None, None, current_shape)
-        dw_down, _m = gr.warp_with_orfield(ddown, b, down_pedir,
-                                           None, None, None, current_shape)
+        Ain = None
+        Aout = npl.inv(up_grid2world).dot(field_grid2world)
+        Adisp = Aout
 
+        w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
+                                        Aout, Adisp, current_shape)
+
+        Ain = None
+        Aout = npl.inv(down_grid2world).dot(field_grid2world)
+        Adisp = Aout
+        w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
+                                          Aout, Adisp, current_shape)
         dw_up = gr.der_y(w_up)
         dw_down = gr.der_y(w_down)
         # Convert to numpy arrays
@@ -92,11 +94,14 @@ class SingleEPI_CC(EPIDistortionModel):
         """
         self.radius = radius
 
-    def energy_and_gradient(self, nonepi, nonepi_pedir, epi, epi_pedir, field,
-                            mask_nonepi=None, mask_epi=None):
-        current_shape = np.array(epi.shape, dtype=np.int32)
+    def energy_and_gradient(self,
+                            epi, epi_grid2world, epi_pedir,
+                            nonepi, nonepi_grid2world, nonepi_pedir,
+                            field, field_grid2world,
+                            mask_epi=None, mask_nonepi=None):
         b  = np.array(field.get_volume((0,0,0)))
         b = b.astype(np.float64)
+        current_shape = np.array(b.shape, dtype=np.int32)
 
         db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
         kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
@@ -105,17 +110,19 @@ class SingleEPI_CC(EPIDistortionModel):
         field_shape = field.grid_shape
         kcoef_grad = np.zeros_like(field.coef)
 
-        # Numerical derivatives of input images
-        depi = gr.der_y(epi)
-        dnonepi = gr.der_y(nonepi)
-
         # Warp images and their derivatives
-        w_epi, _m = gr.warp_with_orfield(epi, b, epi_pedir, None,
-                                        None, None, current_shape)
-        dw_epi, _m = gr.warp_with_orfield(depi, b, epi_pedir, None,
-                                         None, None, current_shape)
+        Ain = None
+        Aout = npl.inv(epi_grid2world).dot(field_grid2world)
+        Adisp = Aout
+        w_epi, _m = gr.warp_with_orfield(epi, b, epi_pedir, Ain,
+                                        Aout, Adisp, current_shape)
+        # align nonepi to the field grid
+        affmap = AffineMap(None, current_shape, field_grid2world,
+                           nonepi.shape, nonepi_grid2world)
+        aligned_nonepi = affmap.transform(nonepi)
 
         dw_epi = gr.der_y(w_epi)
+        dnonepi = gr.der_y(aligned_nonepi)
         # Convert to numpy arrays
         w_epi = np.array(w_epi)
         dw_epi = np.array(dw_epi)
@@ -123,7 +130,7 @@ class SingleEPI_CC(EPIDistortionModel):
 
         # This should consider more general PE directions, but for now
         # it assumes it's along the y axis
-        energy = cc_splines_gradient(nonepi, w_epi, dnonepi, dw_epi,
+        energy = cc_splines_gradient(aligned_nonepi, w_epi, dnonepi, dw_epi,
                                      pedir_factor,
                                      None, None, kernel, dkernel,
                                      db, kspacing, field_shape,
@@ -152,21 +159,53 @@ class SingleEPI_ECC(EPIDistortionModel):
         self.quantize = em.quantize_positive_3d
         self.compute_stats = em.compute_masked_class_stats_3d
 
-    def initialize_iteration(self, epi, pedir, nonepi, field,
-                             epi_mask=None, nonepi_mask=None):
-        r"""
-        Pre-computes the cross-correlation factors
-        """
+    def energy_and_gradient(self,
+                            epi, epi_grid2world, epi_pedir,
+                            nonepi, nonepi_grid2world, nonepi_pedir,
+                            field, field_grid2world,
+                            epi_mask, nonepi_mask):
+        b  = np.array(field.get_volume((0,0,0)))
+        b = b.astype(np.float64)
+        current_shape = np.array(b.shape, dtype=np.int32)
+
+        db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
+        kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
+        dkernel = np.array(field.spline3d.get_kernel_grid((0,1,0)))
+        kspacing = field.kspacing
+        field_shape = field.grid_shape
+        kcoef_grad = np.zeros_like(field.coef)
+
+        # Resample input images at field's grid
+        Ain = None
+        Aout = npl.inv(epi_grid2world).dot(field_grid2world)
+        Adisp = Aout
+        w_epi, _m = gr.warp_with_orfield(epi, b, epi_pedir, Ain,
+                                        Aout, Adisp, current_shape)
+        w_epi_mask, _m = gr.warp_with_orfield_nn(epi_mask, b, epi_pedir, Ain,
+                                        Aout, Adisp, current_shape)
+        # align nonepi to the field grid
+        affmap = AffineMap(None, current_shape, field_grid2world,
+                           nonepi.shape, nonepi_grid2world)
+        aligned_nonepi = affmap.transform(nonepi)
+        aligned_nonepi_mask = affmap.transform(nonepi_mask, interp='nearest')
+
         ##################################################
         #Estimate the hidden variables (EM-initialization)
         ##################################################
-        self.epi = epi
-        self.nonepi = nonepi
-        self.epi_mask = epi_mask
-        self.nonepi_mask = nonepi_mask
+        mult_by_mask = True
+        if mult_by_mask:
+            self.epi = np.array(w_epi) * np.array(w_epi_mask)
+            self.nonepi = np.array(aligned_nonepi) * np.array(aligned_nonepi_mask)
+        else:
+            self.epi = np.array(w_epi)
+            self.nonepi = np.array(aligned_nonepi)
+        self.depi = gr.der_y(self.epi)
+        self.dnonepi = gr.der_y(self.nonepi)
+        self.epi_mask = w_epi_mask
+        self.nonepi_mask = aligned_nonepi_mask
 
         #Use only the foreground intersection for estimation
-        sampling_mask = np.array(self.nonepi_mask*self.epi_mask, dtype = np.int32)
+        sampling_mask = np.array(self.nonepi_mask * self.epi_mask, dtype = np.int32)
         self.sampling_mask = sampling_mask
 
         #Process the non-epi quantization
@@ -187,65 +226,30 @@ class SingleEPI_ECC(EPIDistortionModel):
 
         #Process the epi quantization
         epiq, self.epiq_levels, hist = self.quantize(self.epi,
-                                                           self.q_levels)
+                                                     self.q_levels)
         epiq = np.array(epiq, dtype=np.int32)
         self.epiq_levels = np.array(self.epiq_levels)
         epiq_means, epiq_variances = self.compute_stats(
-            sampling_mask, self.nonepi, self.q_levels, epiq)
+                            sampling_mask, self.nonepi, self.q_levels, epiq)
         epiq_means[0] = 0
         self.epiq_means = np.array(epiq_means)
         self.epiq_variances = np.array(epiq_variances)
         self.epiq_variances[np.isinf(self.epiq_variances)] = self.epiq_variances.max()
         self.epiq_sigma_sq_field = self.epiq_variances[epiq]
         self.epiq_means_field = self.epiq_means[epiq]
+        #rt.overlay_slices(self.epi, self.nonepi, slice_type=2)
+        #rt.overlay_slices(self.epi_mask, self.nonepi_mask, slice_type=2)
+        #rt.overlay_slices(self.epi, self.nonepiq_means_field, slice_type=2)
 
-        ##################################################
-        #Compute the CC factors (CC-initialization)
-        ##################################################
-
-        #self.nonepiq_factors = self.precompute_factors(self.nonepiq_means_field,
-        #                                     self.epi,
-        #                                     self.radius)
-        #self.epiq_factors = self.precompute_factors(self.nonepi,
-        #                                     self.epiq_means_field,
-        #                                     self.radius)
-        #
-        #self.nonepiq_factors = np.array(self.nonepiq_factors)
-        #self.epiq_factors = np.array(self.epiq_factors)
-
-        ##################################################
-        #Compute the gradients (common initialization)
-        ##################################################
-        self.gradient_epi = np.empty(
-                shape=(self.epi.shape)+(3,), dtype=np.float64)
-        for i, grad in enumerate(sp.gradient(self.epi)):
-            self.gradient_epi[..., i] = grad
-
-        self.gradient_nonepi = np.empty(
-                shape=(self.nonepi.shape)+(3,), dtype=np.float64)
-        for i, grad in enumerate(sp.gradient(self.nonepi)):
-            self.gradient_nonepi[..., i] = grad
-
-        # Note: the gradient needs to be in grid-space to estimate the
-        # off-resonance field, but it must be in physical space to
-        # align the non-epi image
-
-
-    def energy_and_gradient_single(self, epi, pedir, nonepi, field,
-                                   epi_mask=None, nonepi_mask=None):
-        self.initialize_iteration(epi, pedir, nonepi, field, epi_mask, nonepi_mask)
-        rt.overlay_slices(self.epi, self.nonepiq_means_field, slice_type=2)
-        #rt.overlay_slices(self.epiq_means_field, self.nonepi, slice_type=2)
-        return None, None
-
-    def energy_and_gradient(self, epi, epi_pedir, non_epi, non_epi_pedir,
-                            field, epi_mask=None, nonepi_mask=None):
-        r"""
-        Ignore `non_epi_pedir` parameter
-        """
-        return self.energy_and_gradient_single(epi, epi_pedir, non_epi, field,
-                                               epi_mask, nonepi_mask)
-
+        self.dnonepiq_means_field = gr.der_y(self.nonepiq_means_field)
+        pedir_factor = epi_pedir[1]
+        energy = cc_splines_gradient(self.nonepiq_means_field, self.epi,
+                                     self.dnonepiq_means_field, self.depi,
+                                     pedir_factor,
+                                     None, None, kernel, dkernel,
+                                     db, kspacing, field_shape,
+                                     self.radius, kcoef_grad)
+        return energy, kcoef_grad
 
 
 
@@ -509,9 +513,9 @@ class OffResonanceFieldEstimator(object):
             tolerance = 1e-6
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
-
+                Id = np.eye(4)
                 energy, grad = self.distortion_model.energy_and_gradient(
-                            current1, f1_pedir, current2, f2_pedir, field)
+                            current1, Id, f1_pedir, current2, Id, f2_pedir, field)
                 grad = np.array(gr.unwrap_scalar_field(grad))
 
                 bending_energy, bending_grad = field.get_bending_gradient()
@@ -555,7 +559,6 @@ class OffResonanceFieldEstimator(object):
                                          f2_affine,
                                          spacings,
                                          False)
-
         field = None
         b = None
         b_coeff = None
@@ -570,9 +573,11 @@ class OffResonanceFieldEstimator(object):
             shape1 = self.f1_ss.get_domain_shape(scale)
             affine1 = self.f1_ss.get_affine(scale)
             f1_smooth = self.f1_ss.get_image(scale)
-            aff = AffineMap(None, shape1, affine1, f1.shape, f1_affine)
-            current1 = aff.transform(f1_smooth)
-            current1_mask = (aff.transform(f1>0)).astype(np.int32)
+            f1_mask = (f1_smooth>0).astype(np.int32)
+            #f1_mask = (f1>0).astype(np.int32)
+            #aff = AffineMap(None, shape1, affine1, f1.shape, f1_affine)
+            #current1 = aff.transform(f1_smooth)
+
 
             # Resample second image
             # In the EPI vs. Non-EPI case, this is the non-epi image,
@@ -580,12 +585,14 @@ class OffResonanceFieldEstimator(object):
             shape2 = self.f2_ss.get_domain_shape(scale)
             affine2 = self.f2_ss.get_affine(scale)
             f2_smooth = self.f2_ss.get_image(scale)
+            f2_mask = (f2_smooth>0).astype(np.int32)
+            #f2_mask = (f2>0).astype(np.int32)
             # We must warp f2 towards [shape1, affine1]
-            aff = AffineMap(None, shape1, affine1, f2.shape, f2_affine)
-            current2 = aff.transform(f2_smooth)
-            current2_mask = (aff.transform(f2>0)).astype(np.int32)
+            #aff = AffineMap(None, shape1, affine1, f2.shape, f2_affine)
+            #current2 = aff.transform(f2_smooth)
 
-            self.images.append([current1, current2])
+
+            #self.images.append([current1, current2])
             #continue
 
             resampled_sp = self.subsampling[stage] * spacings
@@ -603,20 +610,20 @@ class OffResonanceFieldEstimator(object):
             if field is None:
                 # The field has not been created, this must be the first stage
                 print("Creating field")
-                field = CubicSplineField(current1.shape, kspacing)
+                field = CubicSplineField(shape1, kspacing)
                 b_coeff = np.zeros(field.num_coefficients())
                 field.copy_coefficients(b_coeff)
-            elif (not np.all(current1.shape == field.vol_shape) or
+            elif (not np.all(shape1 == field.vol_shape) or
                   not np.all(kspacing == field.kspacing)):
                 b = field.get_volume()
                 # We need to reshape the field
-                new_field = CubicSplineField(current1.shape, kspacing)
+                new_field = CubicSplineField(shape1, kspacing)
                 resample_affine = (self.subsampling[stage] * np.eye(4) /
                                    self.subsampling[stage-1])
                 resample_affine[3,3] = 1.0
                 print ("Resampling field:",resample_affine)
                 new_b = vfu.transform_3d_affine(b.astype(np.float64),
-                                                np.array(current1.shape, dtype=np.int32),
+                                                np.array(shape1, dtype=np.int32),
                                                 resample_affine)
                 new_b = np.array(new_b, dtype=np.float64)
                 # Scale to new voxel size
@@ -637,8 +644,10 @@ class OffResonanceFieldEstimator(object):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
 
                 energy, grad = self.distortion_model.energy_and_gradient(
-                            current1, f1_pedir, current2, f2_pedir, field,
-                            current1_mask, current2_mask)
+                            f1_smooth, f1_affine, f1_pedir,
+                            f2_smooth, f2_affine, f2_pedir,
+                            field, affine1,
+                            f1_mask, f2_mask)
                 if energy is None or grad is None:
                     break
                 grad = np.array(gr.unwrap_scalar_field(grad))

@@ -5,7 +5,9 @@ import numpy as np
 import nibabel as nib
 import dipy.align.imwarp as imwarp
 from dipy.align import VerbosityLevels
-from dipy.align.imaffine import MutualInformationMetric, AffineRegistration
+from dipy.align.imaffine import (MutualInformationMetric,
+                                 AffineRegistration,
+                                 AffineMap)
 from dipy.align.transforms import regtransforms
 import dipy.correct.gradients as gr
 from dipy.correct.splines import CubicSplineField
@@ -81,7 +83,7 @@ def dipy_align(static, static_grid2world, moving, moving_grid2world):
     return sol
 
 
-def test_epicor_api_cc():
+def test_epicor_OPPOSITE_BLIPS_CC_REGRID():
     # Load images
     up_nib = nib.load(up_fname)
     up_affine = up_nib.get_affine()
@@ -167,7 +169,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
 
-    orfield_coef_fname = 'orfield_coef_ss.p'
+    orfield_coef_fname = 'orfield_coef_ss_one_resample.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef = pickle.load(open(orfield_coef_fname, 'r'))
@@ -234,7 +236,9 @@ def test_epicor_SINGLE_CC_SS():
         orfield = CubicSplineField(epi.shape, kspacing)
         orfield.copy_coefficients(coef)
     else:
-        orfield = estimator.optimize_with_ss(nonepi, nonepi_affine, pedir_nonepi, epi, epi_affine, pedir_epi, spacings)
+        orfield = estimator.optimize_with_ss(epi, epi_affine, pedir_epi,
+                                             nonepi, nonepi_affine, pedir_nonepi,
+                                             spacings)
         pickle.dump(np.array(orfield.coef), open(orfield_coef_fname, 'w'))
 
     # Warp and modulte images
@@ -252,6 +256,7 @@ def test_epicor_SINGLE_CC_SS():
 def test_epicor_SINGLE_ECC_SS():
     # Load images
     epi_fname = up_strip_fname
+    #epi_fname = up_unwarped_fname
     nonepi_fname = t1_fname
 
     epi_nib = nib.load(epi_fname)
@@ -262,6 +267,7 @@ def test_epicor_SINGLE_ECC_SS():
     nonepi_nib = nib.load(nonepi_fname)
     nonepi_affine = nonepi_nib.get_affine()
     nonepi = nonepi_nib.get_data().squeeze().astype(np.float64)
+    nonepi /=nonepi.max()
 
     radius = 4
 
@@ -271,82 +277,33 @@ def test_epicor_SINGLE_ECC_SS():
     # Configure and run orfield estimation
     epi_pedir = np.array((0,1,0), dtype=np.float64)
     nonepi_pedir = np.array((0,0,0), dtype=np.float64)
-    distortion_model = SingleEPI_ECC(radius=radius, q_levels=64)
+    distortion_model = SingleEPI_ECC(radius=radius, q_levels=256)
     level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
                        0.5, 0.05, 0.05])*300
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
 
-    orfield = estimator.optimize_with_ss(epi, epi_affine, epi_pedir, nonepi, nonepi_affine, nonepi_pedir, spacings)
+    orfield = estimator.optimize_with_ss(epi, epi_affine, epi_pedir,
+                                         nonepi, nonepi_affine, nonepi_pedir,
+                                         spacings)
 
-    # Warp and modulte images
+
     b  = np.array(orfield.get_volume((0, 0, 0)))
     db = np.array(orfield.get_volume((0, 1, 0)))
     shape = np.array(epi.shape, dtype=np.int32)
     w_epi, _m = gr.warp_with_orfield(epi, b, epi_pedir, None,
                                     None, None, shape)
 
+    # Resample nonepi on top of epi
+    affmap = AffineMap(None, epi.shape, epi_affine, nonepi.shape, nonepi_affine)
+    nonepi_resampled = affmap.transform(nonepi)
     rt.plot_slices(b)
-    overlay_slices(epi, w_epi, slice_type=2)
-    #overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
-    return
+    overlay_slices(nonepi_resampled, epi, slice_type=2)
+    overlay_slices(nonepi_resampled, w_epi*(1+db), slice_type=2)
 
 
-    up_nib = nib.load(up_fname)
-    up_affine = up_nib.get_affine()
-    direction, spacings = imwarp.get_direction_and_spacings(up_affine, 3)
-    up = up_nib.get_data().squeeze().astype(np.float64)
 
-    down_nib = nib.load(down_fname)
-    down_affine = down_nib.get_affine()
-    down = down_nib.get_data().squeeze().astype(np.float64)
-
-    radius = 4
-
-    # Preprocess intensities
-    up /= up.mean()
-    down /= down.mean()
-
-    # Configure and run orfield estimation
-    pedir_up = np.array((0,1,0), dtype=np.float64)
-    pedir_down = np.array((0,-1,0), dtype=np.float64)
-    distortion_model = OppositeBlips_CC(radius=radius)
-    level_iters = [1, 1, 1, 1, 1, 1, 1, 1, 1]
-    #lambdas = np.array([1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e2, 1e1])/5000.0
-    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
-    #level_iters = None
-    lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-                       0.5, 0.05, 0.05])*300
-    fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
-    estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
-    #estimator = OffResonanceFieldEstimator(distortion_model)
-    orfield_coef_fname = 'orfield_coef_ss.p'
-    orfield = None
-    if os.path.isfile(orfield_coef_fname):
-        coef = pickle.load(open(orfield_coef_fname, 'r'))
-        kspacing = np.round(estimator.warp_res[-1]/spacings)
-        kspacing = kspacing.astype(np.int32)
-        kspacing[kspacing < 1] = 1
-        orfield = CubicSplineField(up.shape, kspacing)
-        orfield.copy_coefficients(coef)
-    else:
-        orfield = estimator.optimize_with_ss(down, down_affine, pedir_down, up, up_affine, pedir_up, regrided_spacings)
-        pickle.dump(np.array(orfield.coef), open(orfield_coef_fname, 'w'))
-
-
-    # Warp and modulte images
-    b  = np.array(orfield.get_volume((0, 0, 0)))
-    db = np.array(orfield.get_volume((0, 1, 0)))
-    shape = np.array(up.shape, dtype=np.int32)
-    w_up, _m = gr.warp_with_orfield(up, b, pedir_up, None,
-                                    None, None, shape)
-    w_down, _m = gr.warp_with_orfield(down, b, pedir_down, None,
-                                      None, None, shape)
-    rt.overlay_slices(down, up, slice_type=2);
-    rt.plot_slices(b);
-    overlay_slices(w_down, w_up, slice_type=2);
-    overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2);
 
 
 
