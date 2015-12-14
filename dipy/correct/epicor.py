@@ -1,4 +1,5 @@
 import numpy as np
+import gc
 import numpy.linalg as npl
 import scipy as sp
 import dipy.viz.regtools as rt
@@ -10,7 +11,9 @@ from dipy.align.imaffine import AffineMap
 from dipy.align.scalespace import IsotropicScaleSpace
 from dipy.correct.splines import CubicSplineField
 from dipy.correct.cc_splines import (cc_splines_gradient_epicor,
+                                     cc_splines_grad_epicor_motion,
                                      cc_splines_gradient)
+from dipy.align.transforms import TranslationTransform3D
 
 floating = np.float64
 
@@ -52,6 +55,16 @@ class OppositeBlips_CC(EPIDistortionModel):
         kspacing = field.kspacing
         field_shape = field.grid_shape
         kcoef_grad = np.zeros_like(field.coef)
+        # Compute gradients
+
+        grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
+        grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
+
+        for i, grad in enumerate(sp.gradient(up)):
+            grad_up[..., i] = grad
+
+        for i, grad in enumerate(sp.gradient(down)):
+            grad_down[..., i] = grad
 
         # Warp images and their derivatives
         Ain = None
@@ -66,23 +79,131 @@ class OppositeBlips_CC(EPIDistortionModel):
         Adisp = Aout
         w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
                                           Aout, Adisp, current_shape)
-        dw_up = gr.der_y(w_up)
-        dw_down = gr.der_y(w_down)
+        # Resample graients
+        wgrad_up = np.zeros_like(grad_up)
+        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
+
+        wgrad_down = np.zeros_like(grad_down)
+        gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
+        dw_up = wgrad_up[...,1].copy()
+        dw_down = wgrad_down[...,1].copy()
+
+
+        #dw_up = gr.der_y(w_up)
+        #dw_down = gr.der_y(w_down)
         # Convert to numpy arrays
         w_up = np.array(w_up)
         w_down = np.array(w_down)
         dw_up = np.array(dw_up)
         dw_down = np.array(dw_down)
-        pedir_factor = up_pedir[1]
+        pedir_factor = down_pedir[1]
 
         # This should consider more general PE directions, but for now
         # it assumes it's along the y axis
-        energy = cc_splines_gradient_epicor(w_down, w_up, dw_down, dw_up,
+        energy = cc_splines_gradient_epicor(w_down, w_up,
+                                            dw_down, dw_up,
                                             pedir_factor,
                                             None, None, kernel, dkernel,
                                             db, kspacing, field_shape,
                                             self.radius, kcoef_grad)
+
+
         return energy, kcoef_grad
+
+
+class OppositeBlips_CC_Motion(EPIDistortionModel):
+    def __init__(self,
+                 radius=4):
+        r""" OppositeBlips_CC_Motion
+
+        EPI distortion model based on the Normalized Cross Correlation
+        metric, with motion estimation.
+
+        Parameters
+        ----------
+        radius : int (optional)
+            radius of the local window of the CC metric. Default is 4.
+        """
+        self.radius = radius
+        self.transform = TranslationTransform3D()
+
+    def energy_and_gradient(self,
+                            down, down_grid2world, down_pedir,
+                            up, up_grid2world, up_pedir, theta,
+                            field, field_grid2world,
+                            mask_down=None, mask_up=None):
+        b  = np.array(field.get_volume((0,0,0)))
+        b = b.astype(np.float64)
+        current_shape = np.array(b.shape, dtype=np.int32)
+
+        db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
+        kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
+        dkernel = np.array(field.spline3d.get_kernel_grid((0,1,0)))
+        kspacing = field.kspacing
+        field_shape = field.grid_shape
+
+        # Get the warped images considering motion and off-resonance field
+        # For each point x in the field domain, we send it to send it to
+        # the original "static" image, then transform to the moving image
+        # and displace by the off-resonance field. We need to consider
+        # that the origin of the transform is the geometric center of the
+        # static image
+        # [A_m^{-1}] [R_\theta] [A_field] x + b(x)[A_m^{-1}] [A_field]
+        R = self.transform.param_to_matrix(theta)
+
+        Ain = None
+        Aout = npl.inv(up_grid2world).dot(R.dot(field_grid2world))
+        Adisp = npl.inv(up_grid2world).dot(field_grid2world)
+
+        w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
+                                        Aout, Adisp, current_shape)
+
+        Ain = None
+        Aout = npl.inv(down_grid2world).dot(field_grid2world)
+        Adisp = Aout
+        w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
+                                          Aout, Adisp, current_shape)
+
+
+        # Compute gradients
+        grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
+        grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
+
+        for i, grad in enumerate(sp.gradient(up)):
+            grad_up[..., i] = grad
+
+        for i, grad in enumerate(sp.gradient(down)):
+            grad_down[..., i] = grad
+
+
+        # Resample gradients
+        Ain = None
+        Aout = npl.inv(up_grid2world).dot(R.dot(field_grid2world))
+        Adisp = npl.inv(up_grid2world).dot(field_grid2world)
+        wgrad_up = np.zeros_like(grad_up)
+        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
+
+        Ain = None
+        Aout = npl.inv(down_grid2world).dot(field_grid2world)
+        Adisp = Aout
+        wgrad_down = np.zeros_like(grad_down)
+        gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
+
+
+        pedir_factor = down_pedir[1]
+        kcoef_grad = np.zeros_like(field.coef)
+        dtheta = np.zeros_like(theta)
+
+        energy = cc_splines_grad_epicor_motion(w_down, w_up,
+                                               wgrad_up, wgrad_down,
+                                               pedir_factor,
+                                               None, None, kernel, dkernel,
+                                               db, kspacing, field_shape,
+                                               self.radius, self.transform,
+                                               theta, kcoef_grad, dtheta)
+
+        return energy, kcoef_grad, dtheta
+
 
 
 class SingleEPI_CC(EPIDistortionModel):
@@ -675,3 +796,144 @@ class OffResonanceFieldEstimator(object):
                 print("Energy: %f. [%f]"%(total_energy, der))
             self.fields.append(field.get_volume())
         return field
+
+
+    def optimize_with_ss_motion(self, f1, f1_affine, f1_pedir,
+                               f2, f2_affine, f2_pedir,
+                               spacings):
+        fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+        self.f1_ss = IsotropicScaleSpace(f1,
+                                         self.subsampling,
+                                         self.fwhm / fwhm2sigma,
+                                         f1_affine,
+                                         spacings,
+                                         False)
+        self.f2_ss = IsotropicScaleSpace(f2,
+                                         self.subsampling,
+                                         self.fwhm / fwhm2sigma,
+                                         f2_affine,
+                                         spacings,
+                                         False)
+        field = None
+        b = None
+        b_coeff = None
+        self.fields = []
+        self.images = []
+        theta = self.distortion_model.transform.get_identity_parameters()
+        for stage in range(self.nstages):
+            scale = self.nstages - 1 - stage
+            step_length = self.step_lengths[stage]
+            print("Stage: %d / %d"%(stage + 1, self.nstages))
+
+            # Resample first image
+            shape1 = self.f1_ss.get_domain_shape(scale)
+            affine1 = self.f1_ss.get_affine(scale)
+            f1_smooth = self.f1_ss.get_image(scale)
+            f1_mask = (f1_smooth>0).astype(np.int32)
+            #f1_mask = (f1>0).astype(np.int32)
+            #aff = AffineMap(None, shape1, affine1, f1.shape, f1_affine)
+            #current1 = aff.transform(f1_smooth)
+
+
+            # Resample second image
+            # In the EPI vs. Non-EPI case, this is the non-epi image,
+            # which is going to be rigidly aligned towards f1
+            shape2 = self.f2_ss.get_domain_shape(scale)
+            affine2 = self.f2_ss.get_affine(scale)
+            f2_smooth = self.f2_ss.get_image(scale)
+            f2_mask = (f2_smooth>0).astype(np.int32)
+            #f2_mask = (f2>0).astype(np.int32)
+            # We must warp f2 towards [shape1, affine1]
+            #aff = AffineMap(None, shape1, affine1, f2.shape, f2_affine)
+            #current2 = aff.transform(f2_smooth)
+
+
+            #self.images.append([current1, current2])
+            #continue
+
+            resampled_sp = self.subsampling[stage] * spacings
+            tps_lambda = self.lambdas[stage]
+
+            # get the spline resolution from millimeters to voxels
+            kspacing = np.round(self.warp_res[stage]/resampled_sp)
+            kspacing = kspacing.astype(np.int32)
+            kspacing[kspacing < 1] = 1
+
+            # Scale space smoothing sigma
+            print(">>>kspacing:",kspacing)
+            print(">>>resampled_sp:",resampled_sp)
+            # Create, rescale or keep field as needed
+            if field is None:
+                # The field has not been created, this must be the first stage
+                print("Creating field")
+                field = CubicSplineField(shape1, kspacing)
+                b_coeff = np.zeros(field.num_coefficients())
+                field.copy_coefficients(b_coeff)
+            elif (not np.all(shape1 == field.vol_shape) or
+                  not np.all(kspacing == field.kspacing)):
+                b = field.get_volume()
+                # We need to reshape the field
+                new_field = CubicSplineField(shape1, kspacing)
+                resample_affine = (self.subsampling[stage] * np.eye(4) /
+                                   self.subsampling[stage-1])
+                resample_affine[3,3] = 1.0
+                print ("Resampling field:",resample_affine)
+                new_b = vfu.transform_3d_affine(b.astype(np.float64),
+                                                np.array(shape1, dtype=np.int32),
+                                                resample_affine)
+                new_b = np.array(new_b, dtype=np.float64)
+                # Scale to new voxel size
+                new_b *= ((1.0 * self.subsampling[stage-1]) /
+                          self.subsampling[stage])
+                # Compute the coefficients associated with the resampled field
+                coef = new_field.spline3d.fit_to_data(new_b, 0.0)
+                new_field.copy_coefficients(coef)
+                field = new_field
+                b_coeff = gr.unwrap_scalar_field(coef)
+            else:
+                print ("Keeping field as is")
+
+            # Start gradient descent
+
+            self.energy_list = []
+            tolerance = 1e-6
+            for it in range(self.level_iters[stage]):
+                print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
+
+                energy, grad, dtheta = self.distortion_model.energy_and_gradient(
+                            f1_smooth, f1_affine, f1_pedir,
+                            f2_smooth, f2_affine, f2_pedir, theta,
+                            field, affine1,
+                            f1_mask, f2_mask)
+                dtheta[1] = 0 # do not move along the pe-dir
+                if energy is None or grad is None:
+                    break
+                grad = np.array(gr.unwrap_scalar_field(grad))
+
+                bending_energy, bending_grad = field.get_bending_gradient()
+                bending_grad = tps_lambda * np.array(bending_grad)
+
+                bending_energy *= tps_lambda
+                total_energy = energy + bending_energy
+                self.energy_list.append(total_energy)
+                #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
+                step = -1 * (grad + bending_grad)
+                step = step_length * (step/np.abs(step).max())
+
+                theta_step = -0.05 * step_length * (dtheta/np.abs(dtheta).max())
+                theta += theta_step
+                print("Theta:", theta)
+                if b_coeff is None:
+                    b_coeff = step
+                else:
+                    b_coeff += step
+                field.copy_coefficients(b_coeff)
+                if len(self.energy_list)>=self.energy_window:
+                    der = self._get_energy_derivative()
+                    if der < tolerance:
+                        break
+                else:
+                    der = np.inf
+                print("Energy: %f. [%f]"%(total_energy, der))
+            self.fields.append(field.get_volume())
+        return field, theta

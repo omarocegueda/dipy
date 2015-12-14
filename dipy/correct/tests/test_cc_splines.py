@@ -2,6 +2,7 @@ from __future__ import print_function
 import os
 import pickle
 import numpy as np
+import numpy.linalg as npl
 import nibabel as nib
 import dipy.align.imwarp as imwarp
 from dipy.align import VerbosityLevels
@@ -17,6 +18,7 @@ from experiments.registration.regviz import overlay_slices
 import experiments.registration.dataset_info as info
 
 from dipy.correct.epicor import (OppositeBlips_CC,
+                                 OppositeBlips_CC_Motion,
                                  SingleEPI_CC,
                                  SingleEPI_ECC,
                                  OffResonanceFieldEstimator)
@@ -165,11 +167,11 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     distortion_model = OppositeBlips_CC(radius=radius)
     level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-                       0.5, 0.05, 0.05])*300
+                       0.5, 0.05, 0.05])*400
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
 
-    orfield_coef_fname = 'orfield_coef_ss_one_resample.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_test4.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef = pickle.load(open(orfield_coef_fname, 'r'))
@@ -193,6 +195,70 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     rt.plot_slices(b)
     overlay_slices(w_down, w_up, slice_type=2)
     overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
+
+
+
+
+def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
+    # Load images
+    up_nib = nib.load(up_fname)
+    up_affine = up_nib.get_affine()
+    direction, spacings = imwarp.get_direction_and_spacings(up_affine, 3)
+    up = up_nib.get_data().squeeze().astype(np.float64)
+
+    down_nib = nib.load(down_fname)
+    down_affine = down_nib.get_affine()
+    down = down_nib.get_data().squeeze().astype(np.float64)
+
+    radius = 4
+
+    # Preprocess intensities
+    up /= up.mean()
+    down /= down.mean()
+
+    # Configure and run orfield estimation
+    pedir_up = np.array((0,1,0), dtype=np.float64)
+    pedir_down = np.array((0,-1,0), dtype=np.float64)
+    distortion_model = OppositeBlips_CC_Motion(radius=radius)
+    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                       0.5, 0.05, 0.05])*300
+    fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
+    estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
+
+    orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
+    orfield = None
+    if os.path.isfile(orfield_coef_fname):
+        coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
+        kspacing = np.round(estimator.warp_res[-1]/spacings)
+        kspacing = kspacing.astype(np.int32)
+        kspacing[kspacing < 1] = 1
+        orfield = CubicSplineField(up.shape, kspacing)
+        orfield.copy_coefficients(coef)
+    else:
+        orfield, theta = estimator.optimize_with_ss_motion(down, down_affine, pedir_down, up, up_affine, pedir_up, spacings)
+        pickle.dump(tuple([np.array(orfield.coef), theta]), open(orfield_coef_fname, 'w'))
+
+    # Warp and modulte images
+    b  = np.array(orfield.get_volume((0, 0, 0)))
+    db = np.array(orfield.get_volume((0, 1, 0)))
+    shape = np.array(up.shape, dtype=np.int32)
+
+    w_down, _m = gr.warp_with_orfield(down, b, pedir_down, None,
+                                      None, None, shape)
+
+
+    R = distortion_model.transform.param_to_matrix(theta)
+    Ain = None
+    Aout = npl.inv(up_affine).dot(R.dot(down_affine))
+    Adisp = npl.inv(up_affine).dot(down_affine)
+    w_up, _m = gr.warp_with_orfield(up, b, pedir_up, Ain, Aout, Adisp, np.array(b.shape, dtype=np.int32))
+
+
+    rt.plot_slices(b)
+    overlay_slices(w_down, w_up, slice_type=2)
+    overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
+
 
 
 

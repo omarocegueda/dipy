@@ -3,48 +3,25 @@
 #cython: wraparound=False
 #cython: cdivision=True
 import numpy as np
+cimport numpy as cnp
 cimport cython
 from dipy.align.fused_types cimport floating, number
 from dipy.correct.splines import CubicSplineField
+
+from dipy.align.vector_fields cimport(_apply_affine_3d_x0,
+                                      _apply_affine_3d_x1,
+                                      _apply_affine_3d_x2,
+                                      _apply_affine_2d_x0,
+                                      _apply_affine_2d_x1)
 
 cdef extern from "math.h":
     double sqrt(double x) nogil
     double floor(double x) nogil
 
 
-cdef inline double _apply_affine_3d_x0(double x0, double x1, double x2,
-                                       double h, double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, x2, h), returns the 1st element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, x2, h)
-    """
-    return aff[0, 0] * x0 + aff[0, 1] * x1 + aff[0, 2] * x2 + h*aff[0, 3]
-
-
-cdef inline double _apply_affine_3d_x1(double x0, double x1, double x2,
-                                       double h, double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, x2, h), returns the 2nd element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, x2, h)
-    """
-    return aff[1, 0] * x0 + aff[1, 1] * x1 + aff[1, 2] * x2 + h*aff[1, 3]
-
-
-cdef inline double _apply_affine_3d_x2(double x0, double x1, double x2,
-                                       double h, double[:, :] aff) nogil:
-    r"""Multiplies aff by (x0, x1, x2, h), returns the 3d element of product
-
-    Returns the first component of the product of the homogeneous matrix aff by
-    (x0, x1, x2, h)
-    """
-    return aff[2, 0] * x0 + aff[2, 1] * x1 + aff[2, 2] * x2 + h*aff[2, 3]
-
-
-cdef inline int interpolate_scalar_trilinear(floating[:,:,:] volume,
-                                             double dkk, double dii, double djj,
-                                             floating *out) nogil:
+cdef inline int _interpolate_scalar_3d(floating[:, :, :] volume,
+                                       double dkk, double dii, double djj,
+                                       floating *out) nogil:
     r"""Trilinear interpolation of a 3D scalar image
 
     Interpolates the 3D image at (dkk, dii, djj) and stores the
@@ -71,12 +48,13 @@ cdef inline int interpolate_scalar_trilinear(floating[:,:,:] volume,
         inside == 1, otherwise inside == 0
     """
     cdef:
-        int ns = volume.shape[0]
-        int nr = volume.shape[1]
-        int nc = volume.shape[2]
-        int kk, ii, jj
+        cnp.npy_intp ns = volume.shape[0]
+        cnp.npy_intp nr = volume.shape[1]
+        cnp.npy_intp nc = volume.shape[2]
+        cnp.npy_intp kk, ii, jj
+        int inside
         double alpha, beta, calpha, cbeta, gamma, cgamma
-    if not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1):
+    if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
         out[0] = 0
         return 0
     # find the top left index and the interpolation coefficients
@@ -84,48 +62,174 @@ cdef inline int interpolate_scalar_trilinear(floating[:,:,:] volume,
     ii = <int>floor(dii)
     jj = <int>floor(djj)
     # no one is affected
-    if not ((0 <= kk < ns) and (0 <= ii < nr) and (0 <= jj < nc)):
-        out[0] = 0
-        return 0
+
     cgamma = dkk - kk
     calpha = dii - ii
     cbeta = djj - jj
     alpha = 1 - calpha
     beta = 1 - cbeta
     gamma = 1 - cgamma
-    #---top-left
-    out[0] = alpha * beta * gamma * volume[kk, ii, jj]
-    #---top-right
+
+    inside = 0
+    # ---top-left
+    if (ii >= 0) and (jj >= 0) and (kk >= 0):
+        out[0] = alpha * beta * gamma * volume[kk, ii, jj]
+        inside += 1
+    else:
+        out[0] = 0
+    # ---top-right
     jj += 1
-    if(jj < nc):
+    if (ii >= 0) and (jj < nc) and (kk >= 0):
         out[0] += alpha * cbeta * gamma * volume[kk, ii, jj]
-    #---bottom-right
+        inside += 1
+    # ---bottom-right
     ii += 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (ii < nr) and (jj < nc) and (kk >= 0):
         out[0] += calpha * cbeta * gamma * volume[kk, ii, jj]
-    #---bottom-left
+        inside += 1
+    # ---bottom-left
     jj -= 1
-    if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+    if (ii < nr) and (jj >= 0) and (kk >= 0):
         out[0] += calpha * beta * gamma * volume[kk, ii, jj]
+        inside += 1
     kk += 1
     if(kk < ns):
         ii -= 1
-        out[0] += alpha * beta * cgamma * volume[kk, ii, jj]
+        if (ii >= 0) and (jj >= 0):
+            out[0] += alpha * beta * cgamma * volume[kk, ii, jj]
+            inside += 1
         jj += 1
-        if(jj < nc):
+        if (ii >= 0) and (jj < nc):
             out[0] += alpha * cbeta * cgamma * volume[kk, ii, jj]
-        #---bottom-right
+            inside += 1
+        # ---bottom-right
         ii += 1
-        if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+        if (ii < nr) and (jj < nc):
             out[0] += calpha * cbeta * cgamma * volume[kk, ii, jj]
-        #---bottom-left
+            inside += 1
+        # ---bottom-left
         jj -= 1
-        if((ii >= 0) and (jj >= 0) and (ii < nr) and (jj < nc)):
+        if (ii < nr) and (jj >= 0):
             out[0] += calpha * beta * cgamma * volume[kk, ii, jj]
-    return 1
+            inside += 1
+    return 1 if inside == 8 else 0
 
 
-cdef inline int interpolate_scalar_nn_3d(number[:,:,:] volume, double dkk,
+cdef inline int _interpolate_vector_3d(floating[:, :, :, :] field, double dkk,
+                                       double dii, double djj,
+                                       floating[:] out) nogil:
+    r"""Trilinear interpolation of a 3D vector field
+
+    Interpolates the 3D displacement field at (dkk, dii, djj) and stores the
+    result in out. If (dkk, dii, djj) is outside the vector field's domain, a
+    zero vector is written to out instead.
+
+    Parameters
+    ----------
+    field : array, shape (S, R, C)
+        the input 3D displacement field
+    dkk : floating
+        the first coordinate of the interpolating position
+    dii : floating
+        the second coordinate of the interpolating position
+    djj : floating
+        the third coordinate of the interpolating position
+    out : array, shape (3,)
+        the array which the interpolation result will be written to
+
+    Returns
+    -------
+    inside : int
+        if (dkk, dii, djj) is inside the domain of the displacement field,
+        inside == 1, otherwise inside == 0
+    """
+    cdef:
+        cnp.npy_intp ns = field.shape[0]
+        cnp.npy_intp nr = field.shape[1]
+        cnp.npy_intp nc = field.shape[2]
+        cnp.npy_intp kk, ii, jj
+        int inside
+        double alpha, beta, gamma, calpha, cbeta, cgamma
+    if not (-1 < dkk < ns and -1 < dii < nr and -1 < djj < nc):
+        out[0] = 0
+        out[1] = 0
+        out[2] = 0
+        return 0
+    #---top-left
+    kk = <int>floor(dkk)
+    ii = <int>floor(dii)
+    jj = <int>floor(djj)
+
+    cgamma = dkk - kk
+    calpha = dii - ii
+    cbeta = djj - jj
+    alpha = 1 - calpha
+    beta = 1 - cbeta
+    gamma = 1 - cgamma
+
+    inside = 0
+    if (ii >= 0) and (jj >= 0) and (kk >= 0):
+        out[0] = alpha * beta * gamma * field[kk, ii, jj, 0]
+        out[1] = alpha * beta * gamma * field[kk, ii, jj, 1]
+        out[2] = alpha * beta * gamma * field[kk, ii, jj, 2]
+        inside += 1
+    else:
+        out[0] = 0
+        out[1] = 0
+        out[2] = 0
+    # ---top-right
+    jj += 1
+    if (jj < nc) and (ii >= 0) and (kk >= 0):
+        out[0] += alpha * cbeta * gamma * field[kk, ii, jj, 0]
+        out[1] += alpha * cbeta * gamma * field[kk, ii, jj, 1]
+        out[2] += alpha * cbeta * gamma * field[kk, ii, jj, 2]
+        inside += 1
+    # ---bottom-right
+    ii += 1
+    if (jj < nc) and (ii < nr) and (kk >= 0):
+        out[0] += calpha * cbeta * gamma * field[kk, ii, jj, 0]
+        out[1] += calpha * cbeta * gamma * field[kk, ii, jj, 1]
+        out[2] += calpha * cbeta * gamma * field[kk, ii, jj, 2]
+        inside += 1
+    # ---bottom-left
+    jj -= 1
+    if (jj >= 0) and (ii < nr) and (kk >= 0):
+        out[0] += calpha * beta * gamma * field[kk, ii, jj, 0]
+        out[1] += calpha * beta * gamma * field[kk, ii, jj, 1]
+        out[2] += calpha * beta * gamma * field[kk, ii, jj, 2]
+        inside += 1
+    kk += 1
+    if (kk < ns):
+        ii -= 1
+        if (jj >= 0) and (ii >= 0):
+            out[0] += alpha * beta * cgamma * field[kk, ii, jj, 0]
+            out[1] += alpha * beta * cgamma * field[kk, ii, jj, 1]
+            out[2] += alpha * beta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
+        jj += 1
+        if (jj < nc) and (ii >= 0):
+            out[0] += alpha * cbeta * cgamma * field[kk, ii, jj, 0]
+            out[1] += alpha * cbeta * cgamma * field[kk, ii, jj, 1]
+            out[2] += alpha * cbeta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
+        # ---bottom-right
+        ii += 1
+        if (jj < nc) and (ii < nr):
+            out[0] += calpha * cbeta * cgamma * field[kk, ii, jj, 0]
+            out[1] += calpha * cbeta * cgamma * field[kk, ii, jj, 1]
+            out[2] += calpha * cbeta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
+        # ---bottom-left
+        jj -= 1
+        if (jj >= 0) and (ii < nr):
+            out[0] += calpha * beta * cgamma * field[kk, ii, jj, 0]
+            out[1] += calpha * beta * cgamma * field[kk, ii, jj, 1]
+            out[2] += calpha * beta * cgamma * field[kk, ii, jj, 2]
+            inside += 1
+    return 1 if inside == 8 else 0
+
+
+cdef inline int _interpolate_scalar_nn_3d(number[:, :, :] volume, double dkk,
                                          double dii, double djj,
                                          number *out) nogil:
     r"""Nearest-neighbor interpolation of a 3D scalar image
@@ -154,10 +258,10 @@ cdef inline int interpolate_scalar_nn_3d(number[:,:,:] volume, double dkk,
         inside == 1, otherwise inside == 0
     """
     cdef:
-        int ns = volume.shape[0]
-        int nr = volume.shape[1]
-        int nc = volume.shape[2]
-        int kk, ii, jj
+        cnp.npy_intp ns = volume.shape[0]
+        cnp.npy_intp nr = volume.shape[1]
+        cnp.npy_intp nc = volume.shape[2]
+        cnp.npy_intp kk, ii, jj
         double alpha, beta, calpha, cbeta, gamma, cgamma
     if not (0 <= dkk <= ns - 1 and 0 <= dii <= nr - 1 and 0 <= djj <= nc - 1):
         out[0] = 0
@@ -234,7 +338,7 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                             k, i, j, 1, affine_idx_in)
                         dj = _apply_affine_3d_x2(
                             k, i, j, 1, affine_idx_in)
-                        inside = interpolate_scalar_trilinear[floating](b, dk, di, dj, &tmp)
+                        inside = _interpolate_scalar_3d[floating](b, dk, di, dj, &tmp)
                         dkk = dir[0] * tmp
                         dii = dir[1] * tmp
                         djj = dir[2] * tmp
@@ -263,7 +367,7 @@ def warp_with_orfield(floating[:,:,:] f, floating[:,:,:] b, double[:] dir,
                         dii = di + i
                         djj = dj + j
 
-                    mask[k,i,j] = interpolate_scalar_trilinear[floating](f, dkk, dii, djj,
+                    mask[k,i,j] = _interpolate_scalar_3d[floating](f, dkk, dii, djj,
                                                           &warped[k,i,j])
     return warped, mask
 
@@ -312,7 +416,7 @@ def warp_with_orfield_nn(number[:,:,:] f, floating[:,:,:] b, double[:] dir,
                             k, i, j, 1, affine_idx_in)
                         dj = _apply_affine_3d_x2(
                             k, i, j, 1, affine_idx_in)
-                        inside = interpolate_scalar_trilinear(b, dk, di, dj, &tmp)
+                        inside = _interpolate_scalar_3d(b, dk, di, dj, &tmp)
                         dkk = dir[0] * tmp
                         dii = dir[1] * tmp
                         djj = dir[2] * tmp
@@ -341,7 +445,7 @@ def warp_with_orfield_nn(number[:,:,:] f, floating[:,:,:] b, double[:] dir,
                         dii = di + i
                         djj = dj + j
 
-                    mask[k,i,j] = interpolate_scalar_nn_3d(f, dkk, dii, djj,
+                    mask[k,i,j] = _interpolate_scalar_nn_3d(f, dkk, dii, djj,
                                                           &warped[k,i,j])
     return warped, mask
 
@@ -378,6 +482,86 @@ def der_y(floating[:,:,:] f):
         floating[:,:,:] df = np.empty_like(f, dtype=ftype)
     _der_y(f, df)
     return df
+
+
+def resample_vector_field(floating[:,:,:,:] f, floating[:,:,:] b, double[:] dir,
+                        double[:, :] affine_idx_in,
+                        double[:, :] affine_idx_out,
+                        double[:, :] affine_disp,
+                        int[:] sampling_shape,
+                        floating[:,:,:,:] out):
+    ftype=np.asarray(f).dtype
+    cdef:
+        int nslices = f.shape[0]
+        int nrows = f.shape[1]
+        int ncols = f.shape[2]
+        int nsVol = f.shape[0]
+        int nrVol = f.shape[1]
+        int ncVol = f.shape[2]
+        int i, j, k, inside
+        double dkk, dii, djj, dk, di, dj
+        floating tmp
+    if sampling_shape is not None:
+        nslices = sampling_shape[0]
+        nrows = sampling_shape[1]
+        ncols = sampling_shape[2]
+    elif b is not None:
+        nslices = b.shape[0]
+        nrows = b.shape[1]
+        ncols = b.shape[2]
+
+    #cdef floating[:, :, :, :] warped = np.zeros(shape=(nslices, nrows, ncols,3), dtype=ftype)
+    #cdef int[:, :, :] mask = np.zeros(shape=(nslices, nrows, ncols), dtype=np.int32)
+
+    with nogil:
+
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    if affine_idx_in is None:
+                        dkk = dir[0] * b[k,i,j]
+                        dii = dir[1] * b[k,i,j]
+                        djj = dir[2] * b[k,i,j]
+                    else:
+                        dk = _apply_affine_3d_x0(
+                            k, i, j, 1, affine_idx_in)
+                        di = _apply_affine_3d_x1(
+                            k, i, j, 1, affine_idx_in)
+                        dj = _apply_affine_3d_x2(
+                            k, i, j, 1, affine_idx_in)
+                        inside = _interpolate_scalar_3d[floating](b, dk, di, dj, &tmp)
+                        dkk = dir[0] * tmp
+                        dii = dir[1] * tmp
+                        djj = dir[2] * tmp
+
+                    if affine_disp is not None:
+                        dk = _apply_affine_3d_x0(
+                            dkk, dii, djj, 0, affine_disp)
+                        di = _apply_affine_3d_x1(
+                            dkk, dii, djj, 0, affine_disp)
+                        dj = _apply_affine_3d_x2(
+                            dkk, dii, djj, 0, affine_disp)
+                    else:
+                        dk = dkk
+                        di = dii
+                        dj = djj
+
+                    if affine_idx_out is not None:
+                        dkk = dk + _apply_affine_3d_x0(k, i, j, 1,
+                                                       affine_idx_out)
+                        dii = di + _apply_affine_3d_x1(k, i, j, 1,
+                                                       affine_idx_out)
+                        djj = dj + _apply_affine_3d_x2(k, i, j, 1,
+                                                       affine_idx_out)
+                    else:
+                        dkk = dk + k
+                        dii = di + i
+                        djj = dj + j
+
+                    _interpolate_vector_3d[floating](f, dkk, dii, djj,
+                                                          out[k,i,j])
+
+
 
 
 
@@ -803,55 +987,6 @@ def _append_right(double[:] Hdata, int[:] Hindices, int[:] Hindptr,
     return Odata, Oindices, Oindptr
 
 
-def derivative_constraint(double[:,:,:] ckernel, int[:] ksp):
-    cdef:
-        int x, y, z, yside
-        int lx, ly, lz
-        int kx, ky, kz
-        int* mink = [0,0,0]
-        int* maxk = [0,0,0]
-        int cx, cy, cz
-        int col # Constraint index (index given to boundary voxel)
-        int coef_idx
-        double[:] data
-        int[:] indices
-        int[:] indptr
-    with nogil:
-        col = 0
-        for x in range(lx):
-            # Spline knots affecting x (-1 based)
-            mink[0] = x // ksp[0] - 1
-            maxk[0] = 1 + (x + ksp[0] - 1) // ksp[0] + 1
-
-            for yside in range(2):
-                y = yside * (ly-1) # 0 or ly-1
-                # Spline knots affecting x (-1 based)
-                mink[1] = y // ksp[1] - 1
-                maxk[1] = 1 + (y + ksp[1] - 1) // ksp[1] + 1
-
-                for z in range(lz):
-                    # Spline knots affecting x (-1 based)
-                    mink[2] = z // ksp[2] - 1
-                    maxk[2] = 1 + (z + ksp[2] - 1) // ksp[2] + 1
-
-                    for kx in range(mink[0], maxk[0]):
-                        for ky in range(mink[1], maxk[1]):
-                            for kz in range(mink[2], maxk[2]):
-                                cx = kx * ksp[0]
-                                cy = ky * ksp[1]
-                                cz = kz * ksp[2]
-                                ckernel[x - cx, y - cy, z - cz]
-
-
-
-                    col +=1
-
-
-
-
-
-
-
 def gauss_newton_system_andersson(floating[:,:,:] fp, floating[:,:,:] fm,
                                   floating[:,:,:] dfp, floating[:,:,:] dfm,
                                   int[:,:,:] mp, int[:,:,:] mm,
@@ -1101,7 +1236,7 @@ def resample_orfield(floating[:, :, :] b, double[:] factors, int[:] target_shape
                 dkk = <double>k*factors[0]
                 dii = <double>i*factors[1]
                 djj = <double>j*factors[2]
-                interpolate_scalar_trilinear(b, dkk, dii, djj, &expanded[k, i, j])
+                _interpolate_scalar_3d(b, dkk, dii, djj, &expanded[k, i, j])
     return expanded
 
 ######################################################
@@ -1418,5 +1553,5 @@ def regrid(floating[:,:,:]vol, double[:] factors, int[:] new_shape):
                     ii = i * factors[1]
                     jj = j * factors[2]
 
-                    interpolate_scalar_trilinear(vol, kk, ii, jj, &out[k,i,j])
+                    _interpolate_scalar_3d(vol, kk, ii, jj, &out[k,i,j])
     return out
