@@ -1,5 +1,4 @@
 import numpy as np
-import gc
 import numpy.linalg as npl
 import scipy as sp
 import dipy.viz.regtools as rt
@@ -12,7 +11,8 @@ from dipy.align.scalespace import IsotropicScaleSpace
 from dipy.correct.splines import CubicSplineField
 from dipy.correct.cc_splines import (cc_splines_gradient_epicor,
                                      cc_splines_grad_epicor_motion,
-                                     cc_splines_gradient)
+                                     cc_splines_gradient,
+                                     cc_splines_grad_epicor_general)
 from dipy.align.transforms import (TranslationTransform3D,
                                    RigidTransform3D)
 
@@ -127,87 +127,82 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         """
         self.radius = radius
         self.transform = TranslationTransform3D()
+        self.iter_count = 0
         #self.transform = RigidTransform3D()
 
     def energy_and_gradient(self,
-                            down, down_grid2world, down_pedir,
-                            up, up_grid2world, up_pedir, theta,
-                            field, field_grid2world,
+                            down, down_grid2world, down_pedir, down_spacings,
+                            up, up_grid2world, up_pedir, up_spacings,
+                            theta, field, field_grid2world,
                             mask_down=None, mask_up=None):
-        b  = np.array(field.get_volume((0,0,0)))
-        b = b.astype(np.float64)
+        r""" The phase encode directions must be given in grid space,
+        this function will take care of mapping them to physical space
+        """
+        up_pedir = up_grid2world.dot([up_pedir[0], up_pedir[1], up_pedir[2], 1.0])
+        down_pedir = down_grid2world.dot([down_pedir[0], down_pedir[1], down_pedir[2], 1.0])
+        # Evaluate the field and its gradient on the curret grid
+        b  = np.array(field.get_volume((0,0,0))).astype(np.float64)
+        gb = np.empty(b.shape + (3,), dtype=np.float64)
+        gb[...,0] = field.get_volume((1,0,0))
+        gb[...,1] = field.get_volume((0,1,0))
+        gb[...,2] = field.get_volume((0,0,1))
+        # Now we know the shape of the field's grid
         current_shape = np.array(b.shape, dtype=np.int32)
 
-        db = np.array(field.get_volume((0,1,0))) #dtype=np.float64
+        # Evaluate the kernel and its gradient
         kernel = np.array(field.spline3d.get_kernel_grid((0,0,0)))
-        dkernel = np.array(field.spline3d.get_kernel_grid((0,1,0)))
+        gkernel = np.empty(kernel.shape + (3,), dtype=np.float64)
+        gkernel[...,0] = field.spline3d.get_kernel_grid((1,0,0))
+        gkernel[...,1] = field.spline3d.get_kernel_grid((0,1,0))
+        gkernel[...,2] = field.spline3d.get_kernel_grid((0,0,1))
+        # This gradient is already in physical space coordinate system
+        # because we did not interpolate any image but only evaluate
+        # the analytical expression of the splines
         kspacing = field.kspacing
         field_shape = field.grid_shape
 
         # Get the warped images considering motion and off-resonance field
-        # For each point x in the field domain, we send it to send it to
-        # the original "static" image, then transform to the moving image
-        # and displace by the off-resonance field. We need to consider
-        # that the origin of the transform is the geometric center of the
-        # static image
-        # [A_m^{-1}] [R_\theta] [A_field] x + b(x)[A_m^{-1}] [A_field]
         R = self.transform.param_to_matrix(theta)
 
         Ain = None
         Aout = npl.inv(up_grid2world).dot(R.dot(field_grid2world))
-        Adisp = npl.inv(up_grid2world).dot(field_grid2world)
+        # The phase encode direction is in physical space coordinate system
+        Adisp = npl.inv(up_grid2world)
 
         w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
                                         Aout, Adisp, current_shape)
 
         Ain = None
         Aout = npl.inv(down_grid2world).dot(field_grid2world)
-        Adisp = Aout
+        Adisp = npl.inv(up_grid2world)
         w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
                                           Aout, Adisp, current_shape)
 
+        if self.iter_count % 10 == 0:
+            rt.overlay_slices(w_down, w_up, slice_type=2)
+        # compute image gradients in physical space
+        grad_up, inside = vfu.gradient(up, up_grid2world, up_spacings,
+                                     current_shape,
+                                     field_grid2world)
+        grad_down, inside = vfu.gradient(down, down_grid2world, down_spacings,
+                                     current_shape,
+                                     field_grid2world)
 
-        # Compute gradients
-        grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
-        grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
-
-        for i, grad in enumerate(sp.gradient(up)):
-            grad_up[..., i] = grad
-        # Reorient grad_up (map to physical space)
-        Aup = npl.inv(up_grid2world).T
-        vfu.reorient_vector_field_3d(grad_up, Aup)
-
-        for i, grad in enumerate(sp.gradient(down)):
-            grad_down[..., i] = grad
-        # Reorient grad_down (map to physical space)
-        Adown = npl.inv(down_grid2world).T
-        vfu.reorient_vector_field_3d(grad_down, Adown)
-
-        # Resample gradients
-        Ain = None
-        Aout = npl.inv(up_grid2world).dot(R.dot(field_grid2world))
-        Adisp = npl.inv(up_grid2world).dot(field_grid2world)
-        wgrad_up = np.zeros_like(grad_up)
-        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
-
-        Ain = None
-        Aout = npl.inv(down_grid2world).dot(field_grid2world)
-        Adisp = Aout
-        wgrad_down = np.zeros_like(grad_down)
-        gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
-
-
-        pedir_factor = down_pedir[1]
+        # Allocate space for gradients and call
         kcoef_grad = np.zeros_like(field.coef)
         dtheta = np.zeros_like(theta)
-
-        energy = cc_splines_grad_epicor_motion(w_down, w_up,
-                                               wgrad_up, wgrad_down,
-                                               pedir_factor,
-                                               None, None, kernel, dkernel,
-                                               db, field_grid2world, kspacing, field_shape,
-                                               self.radius, self.transform,
-                                               theta, kcoef_grad, dtheta)
+        energy = cc_splines_grad_epicor_general(w_down, w_up,
+                                                down_grid2world, up_grid2world,
+                                                down_pedir, up_pedir,
+                                                grad_down, grad_up,
+                                                None, None,
+                                                kernel, gkernel,
+                                                gb, field_grid2world,
+                                                kspacing, field_shape,
+                                                self.radius,
+                                                self.transform, theta,
+                                                kcoef_grad, dtheta)
+        self.iter_count += 1
 
         return energy, kcoef_grad, dtheta
 
@@ -925,10 +920,9 @@ class OffResonanceFieldEstimator(object):
             tolerance = 1e-6
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
-
                 energy, grad, dtheta = self.distortion_model.energy_and_gradient(
-                            f1_smooth, f1_affine, f1_pedir,
-                            f2_smooth, f2_affine, f2_pedir, theta,
+                            f1_smooth, f1_affine, f1_pedir, spacings,
+                            f2_smooth, f2_affine, f2_pedir, spacings, theta,
                             field, affine1,
                             f1_mask, f2_mask)
                 #dtheta[1] = 0 # do not move along the pe-dir
