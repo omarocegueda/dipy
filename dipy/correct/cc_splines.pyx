@@ -14,6 +14,11 @@ cdef extern from "math.h":
     double sqrt(double x) nogil
     double floor(double x) nogil
 
+from dipy.align.vector_fields cimport(_apply_affine_3d_x0,
+                                      _apply_affine_3d_x1,
+                                      _apply_affine_3d_x2,
+                                      _apply_affine_2d_x0,
+                                      _apply_affine_2d_x1)
 
 cdef inline int _int_max(int a, int b) nogil:
     r"""
@@ -422,7 +427,8 @@ def cc_splines_grad_epicor_motion(double[:,:,:] f1, double[:,:,:] f2,
                                  double pedir_factor,
                                  int[:,:,:] mf, int[:,:,:] mg,
                                  double[:,:,:] kernel, double[:,:,:] dkernel,
-                                 double[:,:,:] dfield, int[:] kspacing,
+                                 double[:,:,:] dfield, double[:,:] fieldg2w,
+                                 int[:] kspacing,
                                  int[:] kshape, cnp.npy_intp radius,
                                  Transform transform, double[:] theta,
                                  double[:,:,:] kcoef, double[:] dtheta):
@@ -593,9 +599,10 @@ def cc_splines_grad_epicor_motion(double[:,:,:] f1, double[:,:,:] f2,
 
                                         # Accumulate contribution to motion gradient
                                         factor = (alpha * F1bar - gamma * F2bar)
-                                        x[0] = ss - center[0]
-                                        x[1] = rr - center[1]
-                                        x[2] = cc - center[2]
+                                        # Must multiply the grid point by field's grid2world
+                                        x[0] = _apply_affine_3d_x0(ss, rr, cc, 1, fieldg2w)
+                                        x[1] = _apply_affine_3d_x1(ss, rr, cc, 1, fieldg2w)
+                                        x[2] = _apply_affine_3d_x2(ss, rr, cc, 1, fieldg2w)
                                         if constant_jacobian == 0:
                                             constant_jacobian = transform._jacobian(theta, x, J)
 

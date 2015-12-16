@@ -13,7 +13,8 @@ from dipy.correct.splines import CubicSplineField
 from dipy.correct.cc_splines import (cc_splines_gradient_epicor,
                                      cc_splines_grad_epicor_motion,
                                      cc_splines_gradient)
-from dipy.align.transforms import TranslationTransform3D
+from dipy.align.transforms import (TranslationTransform3D,
+                                   RigidTransform3D)
 
 floating = np.float64
 
@@ -126,6 +127,7 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         """
         self.radius = radius
         self.transform = TranslationTransform3D()
+        #self.transform = RigidTransform3D()
 
     def energy_and_gradient(self,
                             down, down_grid2world, down_pedir,
@@ -171,10 +173,15 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
 
         for i, grad in enumerate(sp.gradient(up)):
             grad_up[..., i] = grad
+        # Reorient grad_up (map to physical space)
+        Aup = npl.inv(up_grid2world).T
+        vfu.reorient_vector_field_3d(grad_up, Aup)
 
         for i, grad in enumerate(sp.gradient(down)):
             grad_down[..., i] = grad
-
+        # Reorient grad_down (map to physical space)
+        Adown = npl.inv(down_grid2world).T
+        vfu.reorient_vector_field_3d(grad_down, Adown)
 
         # Resample gradients
         Ain = None
@@ -198,7 +205,7 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
                                                wgrad_up, wgrad_down,
                                                pedir_factor,
                                                None, None, kernel, dkernel,
-                                               db, kspacing, field_shape,
+                                               db, field_grid2world, kspacing, field_shape,
                                                self.radius, self.transform,
                                                theta, kcoef_grad, dtheta)
 
@@ -801,6 +808,25 @@ class OffResonanceFieldEstimator(object):
     def optimize_with_ss_motion(self, f1, f1_affine, f1_pedir,
                                f2, f2_affine, f2_pedir,
                                spacings):
+        # Bring the center of the moving image to the origin
+        c_f1 = tuple(0.5 * np.array(f1.shape, dtype=np.float64))
+        c_f1 = f1_affine.dot(c_f1+(1,))
+        correction_f1 = np.eye(4, dtype=np.float64)
+        correction_f1[:3,3] = -1 * c_f1[:3]
+        centered_f1_aff = correction_f1.dot(f1_affine)
+        f1_affine = centered_f1_aff
+
+        # Bring the center of the static image to the origin
+        c_f2 = tuple(0.5 * np.array(f2.shape, dtype=np.float64))
+        c_f2 = f2_affine.dot(c_f2+(1,))
+        correction_f2 = np.eye(4, dtype=np.float64)
+        correction_f2[:3,3] = -1 * c_f2[:3]
+        centered_f2_aff = correction_f2.dot(f2_affine)
+        f2_affine = centered_f2_aff
+
+
+
+
         fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
         self.f1_ss = IsotropicScaleSpace(f1,
                                          self.subsampling,
@@ -905,7 +931,7 @@ class OffResonanceFieldEstimator(object):
                             f2_smooth, f2_affine, f2_pedir, theta,
                             field, affine1,
                             f1_mask, f2_mask)
-                dtheta[1] = 0 # do not move along the pe-dir
+                #dtheta[1] = 0 # do not move along the pe-dir
                 if energy is None or grad is None:
                     break
                 grad = np.array(gr.unwrap_scalar_field(grad))
@@ -918,9 +944,17 @@ class OffResonanceFieldEstimator(object):
                 self.energy_list.append(total_energy)
                 #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
                 step = -1 * (grad + bending_grad)
-                step = step_length * (step/np.abs(step).max())
+                #if np.abs(step).max() > 1:
+                if True:
+                    step = step_length * (step/np.abs(step).max())
+                else:
+                    step = step_length * step
 
-                theta_step = -0.05 * step_length * (dtheta/np.abs(dtheta).max())
+                if np.abs(dtheta).max() > 1:
+                    theta_step = -0.05 * step_length * (dtheta/np.abs(dtheta).max())
+                else:
+                    theta_step = -0.05 * step_length * dtheta
+
                 theta += theta_step
                 print("Theta:", theta)
                 if b_coeff is None:

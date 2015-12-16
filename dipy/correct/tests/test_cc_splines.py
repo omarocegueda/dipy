@@ -171,7 +171,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
 
-    orfield_coef_fname = 'orfield_coef_new_ss_test4.p'
+    orfield_coef_fname = 'orfield_coef_new_ss.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef = pickle.load(open(orfield_coef_fname, 'r'))
@@ -194,7 +194,14 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
                                       None, None, shape)
     rt.plot_slices(b)
     overlay_slices(w_down, w_up, slice_type=2)
-    overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
+
+    Jdown = (1.0-db)
+    Jup = (1.0+db)
+    Jdown[Jdown<0] = 0
+    Jup[Jup<0] = 0
+    rt.overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2);
+
+    #overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
 
 
 
@@ -222,11 +229,12 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     distortion_model = OppositeBlips_CC_Motion(radius=radius)
     level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-                       0.5, 0.05, 0.05])*300
+                       0.5, 0.05, 0.05])*400
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
 
-    orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
+    #orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_motion_reorient.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
@@ -257,7 +265,11 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
     rt.plot_slices(b)
     overlay_slices(w_down, w_up, slice_type=2)
-    overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
+    Jdown = (1.0-db)
+    Jup = (1.0+db)
+    Jdown[Jdown<0] = 0
+    Jup[Jup<0] = 0
+    overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
 
 
 
