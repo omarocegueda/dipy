@@ -280,6 +280,7 @@ def cc_splines_gradient_epicor(double[:,:,:] f1, double[:,:,:] f2,
         int s, r, c, i, j, k, i0, i1, j0, j1, k0, k1, sc_s, sc_r, sc_c, sides, sider, sidec, nwindows
         double Jf2, Jf1, F2bar, F1bar, alpha, beta, gamma, sp_contrib, dF2, dF1, A, B, C, energy
         double deltay = kspacing[1]
+        double minJ1=1e100, maxJ1=-1e100, minJ2=1e100, maxJ2=-1e100
     kcoef[...] = 0
     with nogil:
         for s in range(ns):
@@ -287,8 +288,13 @@ def cc_splines_gradient_epicor(double[:,:,:] f1, double[:,:,:] f2,
                 for c in range(nc):
                     Jf1 = 1.0 + pedir_factor * dfield[s,r,c]  # local Jacobian
                     Jf2 = 1.0 - pedir_factor * dfield[s,r,c]  # local Jacobian
+                    minJ1 = Jf1 if Jf1<minJ1 else minJ1
+                    minJ2 = Jf2 if Jf2<minJ2 else minJ2
+                    maxJ1 = Jf1 if Jf1>maxJ1 else maxJ1
+                    maxJ2 = Jf2 if Jf2>maxJ2 else maxJ2
                     F1[s,r,c] = f1[s,r,c] * Jf1
                     F2[s,r,c] = f2[s,r,c] * Jf2
+    #print("norot: J1[%f, %f], J2[%f, %f]"%(minJ1, maxJ1, minJ2, maxJ2))
 
     # Precompute window sums
     temp = precompute_cc_factors_3d(F1, F2, radius)
@@ -454,6 +460,7 @@ def cc_splines_grad_epicor_motion(double[:,:,:] f1, double[:,:,:] f2,
         double Jf2, Jf1, F2bar, F1bar, alpha, beta, gamma, sp_contrib, dF2, dF1, A, B, C, energy
         double deltay = kspacing[1]
         double factor
+        double minJ1=1e100, maxJ1=-1e100, minJ2=1e100, maxJ2=-1e100
 
     n = transform.number_of_parameters
     J = np.zeros((3, n), dtype=np.float64)
@@ -469,9 +476,13 @@ def cc_splines_grad_epicor_motion(double[:,:,:] f1, double[:,:,:] f2,
                 for c in range(nc):
                     Jf1 = 1.0 + pedir_factor * dfield[s,r,c]  # local Jacobian
                     Jf2 = 1.0 - pedir_factor * dfield[s,r,c]  # local Jacobian
+                    minJ1 = Jf1 if Jf1<minJ1 else minJ1
+                    minJ2 = Jf2 if Jf2<minJ2 else minJ2
+                    maxJ1 = Jf1 if Jf1>maxJ1 else maxJ1
+                    maxJ2 = Jf2 if Jf2>maxJ2 else maxJ2
                     F1[s,r,c] = f1[s,r,c] * Jf1
                     F2[s,r,c] = f2[s,r,c] * Jf2
-
+    #print("general: J1[%f, %f], J2[%f, %f]"%(minJ1, maxJ1, minJ2, maxJ2))
     # Precompute window sums
     temp = precompute_cc_factors_3d(F1, F2, radius)
     with nogil:
@@ -674,6 +685,10 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                     J2[s,r,c] = 1.0 + gfield[s,r,c,0]*f2_pe[0]+gfield[s,r,c,1]*f2_pe[1]+gfield[s,r,c,2]*f2_pe[2]
                     F1[s,r,c] = f1[s,r,c] * J1[s, r, c]
                     F2[s,r,c] = f2[s,r,c] * J2[s, r, c]
+    #print("general: J1[%f, %f], J2[%f, %f]"%(np.min(J1), np.max(J1), np.min(J2), np.max(J2)))
+    #print("gfield: [%f, %f]"%(np.min(gfield), np.max(gfield)))
+    #print("f1_pe: [%f, %f]"%(np.min(f1_pe), np.max(f1_pe)))
+    #print("f2_pe: [%f, %f]"%(np.min(f2_pe), np.max(f2_pe)))
 
     # Precompute window sums
     temp = precompute_cc_factors_3d(F1, F2, radius)

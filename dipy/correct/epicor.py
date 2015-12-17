@@ -40,6 +40,7 @@ class OppositeBlips_CC(EPIDistortionModel):
             radius of the local window of the CC metric. Default is 4.
         """
         self.radius = radius
+        self.cnt = 0
 
     def energy_and_gradient(self,
                             down, down_grid2world, down_pedir,
@@ -74,20 +75,30 @@ class OppositeBlips_CC(EPIDistortionModel):
 
         w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
                                         Aout, Adisp, current_shape)
+        wgrad_up = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
+        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
 
         Ain = None
         Aout = npl.inv(down_grid2world).dot(field_grid2world)
         Adisp = Aout
         w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
                                           Aout, Adisp, current_shape)
-        # Resample graients
-        wgrad_up = np.zeros_like(grad_up)
-        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
 
-        wgrad_down = np.zeros_like(grad_down)
+        wgrad_down = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
         gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
+
         dw_up = wgrad_up[...,1].copy()
         dw_down = wgrad_down[...,1].copy()
+
+        if self.cnt % 10 == 0:
+            #rt.overlay_slices(w_down, w_up, slice_type=2)
+            rt.overlay_slices(dw_down, dw_up, slice_type=2)
+        self.cnt += 1
+
+        #rt.overlay_slices(dw_down, dw_up, slice_type=2)
+
+        #print("[%f, %f], [%f, %f]"%(np.min(dw_down), np.max(dw_down), np.min(dw_up), np.max(dw_up)))
+        #print("[%f, %f]"%(np.min(b), np.max(b)))
 
 
         #dw_up = gr.der_y(w_up)
@@ -138,8 +149,12 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         r""" The phase encode directions must be given in grid space,
         this function will take care of mapping them to physical space
         """
-        up_pedir = up_grid2world.dot([up_pedir[0], up_pedir[1], up_pedir[2], 1.0])
-        down_pedir = down_grid2world.dot([down_pedir[0], down_pedir[1], down_pedir[2], 1.0])
+        up_pedir = up_grid2world.dot([up_pedir[0], up_pedir[1], up_pedir[2], 0.0])
+        down_pedir = down_grid2world.dot([down_pedir[0], down_pedir[1], down_pedir[2], 0.0])
+
+        #up_pedir /= npl.norm(up_pedir)
+        #down_pedir /= npl.norm(down_pedir)
+
         # Evaluate the field and its gradient on the curret grid
         b  = np.array(field.get_volume((0,0,0))).astype(np.float64)
         gb = np.empty(b.shape + (3,), dtype=np.float64)
@@ -161,33 +176,45 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         kspacing = field.kspacing
         field_shape = field.grid_shape
 
+        # Compute image gradients
+        grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
+        grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
+
+        for i, grad in enumerate(sp.gradient(up)):
+            grad_up[..., i] = grad
+
+        for i, grad in enumerate(sp.gradient(down)):
+            grad_down[..., i] = grad
+
         # Get the warped images considering motion and off-resonance field
         R = self.transform.param_to_matrix(theta)
 
         Ain = None
         Aout = npl.inv(up_grid2world).dot(R.dot(field_grid2world))
-        # The phase encode direction is in physical space coordinate system
         Adisp = npl.inv(up_grid2world)
 
         w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
                                         Aout, Adisp, current_shape)
+        wgrad_up = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
+        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
+        # Reorient to physical space
+        vfu.reorient_vector_field_3d(wgrad_up, np.linalg.inv(field_grid2world).T)
+
 
         Ain = None
         Aout = npl.inv(down_grid2world).dot(field_grid2world)
-        Adisp = npl.inv(up_grid2world)
+        Adisp = npl.inv(down_grid2world)
+
         w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
                                           Aout, Adisp, current_shape)
+        wgrad_down = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
+        gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
+        # Reorient to physical space
+        vfu.reorient_vector_field_3d(wgrad_down, np.linalg.inv(field_grid2world).T)
 
         if self.iter_count % 10 == 0:
             rt.overlay_slices(w_down, w_up, slice_type=2)
-        # compute image gradients in physical space
-        grad_up, inside = vfu.gradient(up, up_grid2world, up_spacings,
-                                     current_shape,
-                                     field_grid2world)
-        grad_down, inside = vfu.gradient(down, down_grid2world, down_spacings,
-                                     current_shape,
-                                     field_grid2world)
-
+            #rt.overlay_slices(grad_down[...,1], grad_up[...,1], slice_type=2)
         # Allocate space for gradients and call
         kcoef_grad = np.zeros_like(field.coef)
         dtheta = np.zeros_like(theta)
@@ -727,8 +754,8 @@ class OffResonanceFieldEstimator(object):
             kspacing[kspacing < 1] = 1
 
             # Scale space smoothing sigma
-            print(">>>kspacing:",kspacing)
-            print(">>>resampled_sp:",resampled_sp)
+            #print(">>>kspacing:",kspacing)
+            #print(">>>resampled_sp:",resampled_sp)
             # Create, rescale or keep field as needed
             if field is None:
                 # The field has not been created, this must be the first stage
@@ -777,6 +804,8 @@ class OffResonanceFieldEstimator(object):
 
                 bending_energy, bending_grad = field.get_bending_gradient()
                 bending_grad = tps_lambda * np.array(bending_grad)
+                print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
+                print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
 
                 bending_energy *= tps_lambda
                 total_energy = energy + bending_energy
@@ -880,9 +909,6 @@ class OffResonanceFieldEstimator(object):
             kspacing = kspacing.astype(np.int32)
             kspacing[kspacing < 1] = 1
 
-            # Scale space smoothing sigma
-            print(">>>kspacing:",kspacing)
-            print(">>>resampled_sp:",resampled_sp)
             # Create, rescale or keep field as needed
             if field is None:
                 # The field has not been created, this must be the first stage
@@ -898,21 +924,22 @@ class OffResonanceFieldEstimator(object):
                 resample_affine = (self.subsampling[stage] * np.eye(4) /
                                    self.subsampling[stage-1])
                 resample_affine[3,3] = 1.0
-                print ("Resampling field:",resample_affine)
+                #print ("Resampling field:",resample_affine)
                 new_b = vfu.transform_3d_affine(b.astype(np.float64),
                                                 np.array(shape1, dtype=np.int32),
                                                 resample_affine)
                 new_b = np.array(new_b, dtype=np.float64)
                 # Scale to new voxel size
-                new_b *= ((1.0 * self.subsampling[stage-1]) /
-                          self.subsampling[stage])
+                #new_b *= ((1.0 * self.subsampling[stage-1]) /
+                #          self.subsampling[stage])
                 # Compute the coefficients associated with the resampled field
                 coef = new_field.spline3d.fit_to_data(new_b, 0.0)
                 new_field.copy_coefficients(coef)
                 field = new_field
                 b_coeff = gr.unwrap_scalar_field(coef)
             else:
-                print ("Keeping field as is")
+                pass
+                #print ("Keeping field as is")
 
             # Start gradient descent
 
@@ -932,12 +959,18 @@ class OffResonanceFieldEstimator(object):
 
                 bending_energy, bending_grad = field.get_bending_gradient()
                 bending_grad = tps_lambda * np.array(bending_grad)
+                print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
+                print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
 
                 bending_energy *= tps_lambda
                 total_energy = energy + bending_energy
                 self.energy_list.append(total_energy)
                 #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
                 step = -1 * (grad + bending_grad)
+
+
+
+                #print(">>>>>>>>>>>>>>>>>> ", np.abs(step).max())
                 #if np.abs(step).max() > 1:
                 if True:
                     step = step_length * (step/np.abs(step).max())

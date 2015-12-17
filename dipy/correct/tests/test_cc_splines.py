@@ -157,6 +157,9 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
 
     radius = 4
 
+    up_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
+    down_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
+
     # Preprocess intensities
     up /= up.mean()
     down /= down.mean()
@@ -219,8 +222,8 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
     radius = 4
 
-    up_affine = np.eye(4)
-    down_affine = np.eye(4)
+    up_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
+    down_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
     # Preprocess intensities
     up /= up.mean()
     down /= down.mean()
@@ -229,16 +232,17 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     pedir_up = np.array((0,1,0), dtype=np.float64)
     pedir_down = np.array((0,-1,0), dtype=np.float64)
     distortion_model = OppositeBlips_CC_Motion(radius=radius)
-    #level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
-    level_iters = [200, 1, 1, 1, 1, 1, 1, 1, 1]
+    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    #level_iters = [5, 1, 1, 1, 1, 1, 1, 1, 1]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-                       0.5, 0.05, 0.05])*400
+                       0.5, 0.05, 0.05])*1200
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
-    step_lengths = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    #step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*2
+    step_lengths = None
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm, step_lengths=step_lengths)
 
     #orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
-    orfield_coef_fname = 'orfield_coef_new_ss_motion_ps_id.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_motion_ps.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
@@ -389,3 +393,4 @@ def test_epicor_SINGLE_ECC_SS():
 
 
 
+test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION()

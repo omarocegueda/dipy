@@ -558,8 +558,7 @@ def resample_vector_field(floating[:,:,:,:] f, floating[:,:,:] b, double[:] dir,
                         dii = di + i
                         djj = dj + j
 
-                    _interpolate_vector_3d[floating](f, dkk, dii, djj,
-                                                          out[k,i,j])
+                    _interpolate_vector_3d[floating](f, dkk, dii, djj, out[k,i,j])
 
 
 
