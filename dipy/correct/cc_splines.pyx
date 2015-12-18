@@ -812,12 +812,12 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                         dF1 *= kernel[ss - sc_s, rr - sc_r, cc - sc_c] * J1[ss,rr,cc]
                                         dF2 *= kernel[ss - sc_s, rr - sc_r, cc - sc_c] * J2[ss,rr,cc]
 
-                                        dF1 += gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 0]*f1_pe[0]/kspacing[0] +\
+                                        dF1 += F1bar*(gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 0]*f1_pe[0]/kspacing[0] +\
                                                gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 1]*f1_pe[1]/kspacing[1] +\
-                                               gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 2]*f1_pe[2]/kspacing[2]
-                                        dF2 += gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 0]*f2_pe[0]/kspacing[0] +\
+                                               gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 2]*f1_pe[2]/kspacing[2])
+                                        dF2 += F2bar*(gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 0]*f2_pe[0]/kspacing[0] +\
                                                gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 1]*f2_pe[1]/kspacing[1] +\
-                                               gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 2]*f2_pe[2]/kspacing[2]
+                                               gkernel[ss - sc_s, rr - sc_r, cc - sc_c, 2]*f2_pe[2]/kspacing[2])
 
                                         sp_contrib = ((alpha * F2bar - beta * F1bar) * dF1 +
                                                      (alpha * F1bar - gamma * F2bar) * dF2)

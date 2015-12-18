@@ -168,7 +168,8 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     pedir_up = np.array((0,1,0), dtype=np.float64)
     pedir_down = np.array((0,-1,0), dtype=np.float64)
     distortion_model = OppositeBlips_CC(radius=radius)
-    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    #level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    level_iters = [100, 1, 1, 1, 1, 1, 1, 1, 1]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
                        0.5, 0.05, 0.05])*400
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
@@ -213,17 +214,29 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     # Load images
     up_nib = nib.load(up_fname)
     up_affine = up_nib.get_affine()
-    direction, spacings = imwarp.get_direction_and_spacings(up_affine, 3)
     up = up_nib.get_data().squeeze().astype(np.float64)
 
     down_nib = nib.load(down_fname)
     down_affine = down_nib.get_affine()
     down = down_nib.get_data().squeeze().astype(np.float64)
 
+    dir_up, spacings_up = imwarp.get_direction_and_spacings(up_affine, 3)
+    dir_down, spacings_down = imwarp.get_direction_and_spacings(down_affine, 3)
+
+
     radius = 4
 
-    up_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
-    down_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
+    #up_affine = np.diag([spacings_up[0], spacings_up[1], spacings_up[2], 1.0])
+    #down_affine = np.diag([spacings_down[0], spacings_down[1], spacings_down[2], 1.0])
+    up_affine = np.eye(4)
+    down_affine = np.eye(4)
+    #up_affine[:3,:3] = dir_up
+    #down_affine[:3,:3] = dir_down
+    #up_affine[:3,3] = 0
+    #down_affine[:3,3] = 0
+
+    spacings = spacings_down.copy()
+    spacings[:] = 1
     # Preprocess intensities
     up /= up.mean()
     down /= down.mean()
@@ -232,17 +245,17 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     pedir_up = np.array((0,1,0), dtype=np.float64)
     pedir_down = np.array((0,-1,0), dtype=np.float64)
     distortion_model = OppositeBlips_CC_Motion(radius=radius)
-    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
-    #level_iters = [5, 1, 1, 1, 1, 1, 1, 1, 1]
+    #level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    level_iters = [100, 100, 100, 100, 50, 25, 25, 20, 10]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-                       0.5, 0.05, 0.05])*1200
+                       0.5, 0.5, 0.5])*100
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
-    #step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*2
+    step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*2
     step_lengths = None
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm, step_lengths=step_lengths)
 
     #orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
-    orfield_coef_fname = 'orfield_coef_new_ss_motion_ps.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_motion_id_ll00.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
@@ -252,29 +265,43 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
         orfield = CubicSplineField(up.shape, kspacing)
         orfield.copy_coefficients(coef)
     else:
-        orfield, theta = estimator.optimize_with_ss_motion(down, down_affine, pedir_down, up, up_affine, pedir_up, spacings)
+        rot_pedir_up = dir_up.dot([pedir_up[0], pedir_up[1], pedir_up[2]])
+        rot_pedir_down = dir_down.dot([pedir_down[0], pedir_down[1], pedir_down[2]])
+
+        orfield, theta = estimator.optimize_with_ss_motion(down, down_affine, rot_pedir_down, up, up_affine, rot_pedir_up, spacings)
         pickle.dump(tuple([np.array(orfield.coef), theta]), open(orfield_coef_fname, 'w'))
 
     # Warp and modulte images
     b  = np.array(orfield.get_volume((0, 0, 0)))
-    db = np.array(orfield.get_volume((0, 1, 0)))
-    shape = np.array(up.shape, dtype=np.int32)
 
-    w_down, _m = gr.warp_with_orfield(down, b, pedir_down, None,
-                                      None, None, shape)
-
+    shape = np.array(down.shape, dtype=np.int32)
 
     R = distortion_model.transform.param_to_matrix(theta)
     Ain = None
     Aout = npl.inv(up_affine).dot(R.dot(down_affine))
-    Adisp = npl.inv(up_affine).dot(down_affine)
-    w_up, _m = gr.warp_with_orfield(up, b, pedir_up, Ain, Aout, Adisp, np.array(b.shape, dtype=np.int32))
+    Adisp = npl.inv(up_affine)
 
+    w_up, _m = gr.warp_with_orfield(up, b, rot_pedir_up, Ain,
+                                        Aout, Adisp, shape)
+
+    Ain = None
+    Aout = npl.inv(down_affine).dot(down_affine)
+    Adisp = npl.inv(down_affine)
+
+    w_down, _m = gr.warp_with_orfield(down, b, rot_pedir_down, Ain,
+                                          Aout, Adisp, shape)
 
     rt.plot_slices(b)
     overlay_slices(w_down, w_up, slice_type=2)
-    Jdown = (1.0-db)
-    Jup = (1.0+db)
+    gb = np.zeros(shape=b.shape + (3,), dtype=np.float64)
+    gb[...,0] = orfield.get_volume((1,0,0))
+    gb[...,1] = orfield.get_volume((0,1,0))
+    gb[...,2] = orfield.get_volume((0,0,1))
+
+
+    Jdown = gb[...,0]*rot_pedir_down[0] + gb[...,1]*rot_pedir_down[1] + gb[...,2]*rot_pedir_down[2] + 1
+    Jup = gb[...,0]*rot_pedir_up[0] + gb[...,1]*rot_pedir_up[1] + gb[...,2]*rot_pedir_up[2] + 1
+
     Jdown[Jdown<0] = 0
     Jup[Jup<0] = 0
     overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
@@ -389,7 +416,168 @@ def test_epicor_SINGLE_ECC_SS():
     overlay_slices(nonepi_resampled, w_epi*(1+db), slice_type=2)
 
 
+def compare_gradients():
+    from dipy.align.scalespace import IsotropicScaleSpace
+    # Load images
+    up_nib = nib.load(up_fname)
+    up_affine = up_nib.get_affine()
+    direction, spacings = imwarp.get_direction_and_spacings(up_affine, 3)
+    up = up_nib.get_data().squeeze().astype(np.float64)
 
+    down_nib = nib.load(down_fname)
+    down_affine = down_nib.get_affine()
+    down = down_nib.get_data().squeeze().astype(np.float64)
+
+    radius = 4
+
+    #up_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
+    #down_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
+    up_affine = np.eye(4)
+    down_affine = np.eye(4)
+    # Preprocess intensities
+    up /= up.mean()
+    down /= down.mean()
+
+    # Configure and run orfield estimation
+    pedir_up = np.array((0,1,0), dtype=np.float64)
+    pedir_down = np.array((0,-1,0), dtype=np.float64)
+    level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
+    #level_iters = [5, 1, 1, 1, 1, 1, 1, 1, 1]
+    lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                       0.5, 0.05, 0.05])*400
+    fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0], dtype=np.float64)
+    step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*4
+    subsampling = np.array([2, 2, 2, 2, 2, 1, 1, 1, 1])
+    warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4])
+    nstages = len(subsampling)
+
+
+    motion = OppositeBlips_CC_Motion(radius=radius)
+    nomotion = OppositeBlips_CC(radius=radius)
+
+    # Prepare one iteration from scratch
+
+    f1 = down
+    f1_affine = down_affine
+    f1_pedir = pedir_down
+    f2 = up
+    f2_affine = up_affine
+    f2_pedir = pedir_up
+
+    fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+    f1_ss = IsotropicScaleSpace(f1, subsampling, fwhm / fwhm2sigma,
+                                f1_affine, spacings, False)
+    f2_ss = IsotropicScaleSpace(f2, subsampling, fwhm / fwhm2sigma,
+                                f2_affine, spacings, False)
+    field = None
+    b = None
+    b_coeff = None
+    stage = 0
+    if True:
+        scale = nstages - 1 - stage
+        step_length = step_lengths[stage]
+
+        shape1 = f1_ss.get_domain_shape(scale)
+        affine1 = f1_ss.get_affine(scale)
+        f1_smooth = f1_ss.get_image(scale)
+        f1_mask = (f1_smooth>0).astype(np.int32)
+
+        shape2 = f2_ss.get_domain_shape(scale)
+        affine2 = f2_ss.get_affine(scale)
+        f2_smooth = f2_ss.get_image(scale)
+        f2_mask = (f2_smooth>0).astype(np.int32)
+
+
+        resampled_sp = subsampling[stage] * spacings
+        tps_lambda = lambdas[stage]
+
+        # get the spline resolution from millimeters to voxels
+        kspacing = np.round(warp_res[stage]/resampled_sp)
+        kspacing = kspacing.astype(np.int32)
+        kspacing[kspacing < 1] = 1
+
+        if field is None:
+            field = CubicSplineField(shape1, kspacing)
+            b_coeff = np.zeros(field.num_coefficients())
+            field.copy_coefficients(b_coeff)
+
+
+        if True:
+            it = 0
+            energy_nomotion, grad_nomotion = nomotion.energy_and_gradient(
+                            f1_smooth, f1_affine, f1_pedir,
+                            f2_smooth, f2_affine, f2_pedir,
+                            field, affine1,
+                            f1_mask, f2_mask)
+            rt.plot_slices(grad_nomotion)
+
+            theta = motion.transform.get_identity_parameters()
+            energy_motion, grad_motion, dtheta_motion = motion.energy_and_gradient(
+                                    f1_smooth, f1_affine, f1_pedir, spacings,
+                                    f2_smooth, f2_affine, f2_pedir, spacings, theta,
+                                    field, affine1,
+                                    f1_mask, f2_mask)
+            rt.plot_slices(grad_motion)
+
+            #rt.overlay_slices(motion.w_down, nomotion.w_down, slice_type=2)
+            print(np.abs(motion.w_down - nomotion.w_down).max())
+            #rt.overlay_slices(motion.w_up, nomotion.w_up, slice_type=2)
+            print(np.abs(motion.w_up - nomotion.w_up).max())
+
+            print(nomotion.dw_down.shape)
+            print(motion.wgrad_down[...,1].shape)
+            rt.overlay_slices(motion.wgrad_down[...,1], nomotion.dw_down, slice_type=2)
+            print(np.abs(motion.wgrad_down[...,1]-nomotion.dw_down).max())
+            rt.overlay_slices(motion.wgrad_up[...,1], nomotion.dw_up, slice_type=2)
+            print(np.abs(motion.wgrad_up[...,1]-nomotion.dw_up).max())
+
+            print(motion.down_pedir, "\n", motion.up_pedir)
+            print(nomotion.pedir_factor)
+
+
+            print(np.abs(motion.gkernel[...,1]-nomotion.dkernel).max())
+            print(motion.kspacing)
+            print(nomotion.kspacing)
+            print(motion.field_shape)
+            print(nomotion.field_shape)
+
+            print(np.abs(grad_motion - grad_nomotion).max())
+
+
+
+
+
+            #dtheta[1] = 0 # do not move along the pe-dir
+            if energy is None or grad is None:
+                break
+            grad = np.array(gr.unwrap_scalar_field(grad))
+
+            bending_energy, bending_grad = field.get_bending_gradient()
+            bending_grad = tps_lambda * np.array(bending_grad)
+            print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
+            print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
+
+            bending_energy *= tps_lambda
+            total_energy = energy + bending_energy
+            self.energy_list.append(total_energy)
+            #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
+            step = -1 * (grad + bending_grad)
+
+
+
+            #print(">>>>>>>>>>>>>>>>>> ", np.abs(step).max())
+            #if np.abs(step).max() > 1:
+            if True:
+                step = step_length * (step/np.abs(step).max())
+            else:
+                step = step_length * step
+
+            if np.abs(dtheta).max() > 1:
+                theta_step = -0.05 * step_length * (dtheta/np.abs(dtheta).max())
+            else:
+                theta_step = -0.05 * step_length * dtheta
+
+            theta += theta_step
 
 
 

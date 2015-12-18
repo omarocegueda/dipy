@@ -15,6 +15,7 @@ from dipy.correct.cc_splines import (cc_splines_gradient_epicor,
                                      cc_splines_grad_epicor_general)
 from dipy.align.transforms import (TranslationTransform3D,
                                    RigidTransform3D)
+from dipy.align.imwarp import get_direction_and_spacings
 
 floating = np.float64
 
@@ -90,9 +91,11 @@ class OppositeBlips_CC(EPIDistortionModel):
         dw_up = wgrad_up[...,1].copy()
         dw_down = wgrad_down[...,1].copy()
 
-        if self.cnt % 10 == 0:
+        if self.cnt % 10 == -1:
             #rt.overlay_slices(w_down, w_up, slice_type=2)
-            rt.overlay_slices(dw_down, dw_up, slice_type=2)
+            #rt.overlay_slices(dw_down, dw_up, slice_type=2)
+            #rt.plot_slices(b)
+            rt.plot_slices(db)
         self.cnt += 1
 
         #rt.overlay_slices(dw_down, dw_up, slice_type=2)
@@ -118,6 +121,19 @@ class OppositeBlips_CC(EPIDistortionModel):
                                             None, None, kernel, dkernel,
                                             db, kspacing, field_shape,
                                             self.radius, kcoef_grad)
+
+        remember_last_iter = False
+        if remember_last_iter:
+            self.pedir_factor = pedir_factor
+            self.w_down = w_down
+            self.w_up = w_up
+            self.dw_down = dw_down
+            self.dw_up = dw_up
+            self.kernel = kernel
+            self.dkernel = dkernel
+            self.db = db
+            self.kspacing = kspacing
+            self.field_shape = field_shape
 
 
         return energy, kcoef_grad
@@ -146,12 +162,9 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
                             up, up_grid2world, up_pedir, up_spacings,
                             theta, field, field_grid2world,
                             mask_down=None, mask_up=None):
-        r""" The phase encode directions must be given in grid space,
-        this function will take care of mapping them to physical space
+        r""" The phase encode directions must be normalized and
+        given in physical space coordinates
         """
-        up_pedir = up_grid2world.dot([up_pedir[0], up_pedir[1], up_pedir[2], 0.0])
-        down_pedir = down_grid2world.dot([down_pedir[0], down_pedir[1], down_pedir[2], 0.0])
-
         #up_pedir /= npl.norm(up_pedir)
         #down_pedir /= npl.norm(down_pedir)
 
@@ -198,7 +211,11 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         wgrad_up = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
         gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
         # Reorient to physical space
-        vfu.reorient_vector_field_3d(wgrad_up, np.linalg.inv(field_grid2world).T)
+        debug = False
+        if debug:
+            print("Skip reorientation")
+        else:
+            vfu.reorient_vector_field_3d(wgrad_up, np.linalg.inv(up_grid2world).T)
 
 
         Ain = None
@@ -210,18 +227,24 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         wgrad_down = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
         gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
         # Reorient to physical space
-        vfu.reorient_vector_field_3d(wgrad_down, np.linalg.inv(field_grid2world).T)
+        if debug:
+            print("Skip reorientation")
+        else:
+            vfu.reorient_vector_field_3d(wgrad_down, np.linalg.inv(down_grid2world).T)
 
-        if self.iter_count % 10 == 0:
-            rt.overlay_slices(w_down, w_up, slice_type=2)
-            #rt.overlay_slices(grad_down[...,1], grad_up[...,1], slice_type=2)
+        if debug:
+            if self.iter_count % 10 == 0:
+                rt.plot_slices(gb[...,1])
+                #rt.plot_slices(b)
+                #rt.overlay_slices(w_down, w_up, slice_type=2)
+                #rt.overlay_slices(grad_down[...,1], grad_up[...,1], slice_type=2)
         # Allocate space for gradients and call
         kcoef_grad = np.zeros_like(field.coef)
         dtheta = np.zeros_like(theta)
         energy = cc_splines_grad_epicor_general(w_down, w_up,
                                                 down_grid2world, up_grid2world,
                                                 down_pedir, up_pedir,
-                                                grad_down, grad_up,
+                                                wgrad_down, wgrad_up,
                                                 None, None,
                                                 kernel, gkernel,
                                                 gb, field_grid2world,
@@ -230,6 +253,26 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
                                                 self.transform, theta,
                                                 kcoef_grad, dtheta)
         self.iter_count += 1
+
+        remember_last_iter = False
+        if remember_last_iter:
+            self.reorientation_matrix = np.linalg.inv(down_grid2world).T
+            self.w_down = w_down
+            self.w_up = w_up
+            self.down_grid2world = down_grid2world
+            self.up_grid2world = up_grid2world
+            self.down_pedir = down_pedir
+            self.up_pedir = up_pedir
+            self.grad_down = grad_down
+            self.grad_up = grad_up
+            self.wgrad_down = wgrad_down
+            self.wgrad_up = wgrad_up
+            self.kernel = kernel
+            self.gkernel = gkernel
+            self.gb = gb
+            self.field_grid2world = field_grid2world
+            self.kspacing = kspacing
+            self.field_shape = field_shape
 
         return energy, kcoef_grad, dtheta
 
@@ -832,21 +875,22 @@ class OffResonanceFieldEstimator(object):
     def optimize_with_ss_motion(self, f1, f1_affine, f1_pedir,
                                f2, f2_affine, f2_pedir,
                                spacings):
-        # Bring the center of the moving image to the origin
-        c_f1 = tuple(0.5 * np.array(f1.shape, dtype=np.float64))
-        c_f1 = f1_affine.dot(c_f1+(1,))
-        correction_f1 = np.eye(4, dtype=np.float64)
-        correction_f1[:3,3] = -1 * c_f1[:3]
-        centered_f1_aff = correction_f1.dot(f1_affine)
-        f1_affine = centered_f1_aff
+        if False:
+            # Bring the center of the moving image to the origin
+            c_f1 = tuple(0.5 * np.array(f1.shape, dtype=np.float64))
+            c_f1 = f1_affine.dot(c_f1+(1,))
+            correction_f1 = np.eye(4, dtype=np.float64)
+            correction_f1[:3,3] = -1 * c_f1[:3]
+            centered_f1_aff = correction_f1.dot(f1_affine)
+            f1_affine = centered_f1_aff
 
-        # Bring the center of the static image to the origin
-        c_f2 = tuple(0.5 * np.array(f2.shape, dtype=np.float64))
-        c_f2 = f2_affine.dot(c_f2+(1,))
-        correction_f2 = np.eye(4, dtype=np.float64)
-        correction_f2[:3,3] = -1 * c_f2[:3]
-        centered_f2_aff = correction_f2.dot(f2_affine)
-        f2_affine = centered_f2_aff
+            # Bring the center of the static image to the origin
+            c_f2 = tuple(0.5 * np.array(f2.shape, dtype=np.float64))
+            c_f2 = f2_affine.dot(c_f2+(1,))
+            correction_f2 = np.eye(4, dtype=np.float64)
+            correction_f2[:3,3] = -1 * c_f2[:3]
+            centered_f2_aff = correction_f2.dot(f2_affine)
+            f2_affine = centered_f2_aff
 
 
 
@@ -921,10 +965,10 @@ class OffResonanceFieldEstimator(object):
                 b = field.get_volume()
                 # We need to reshape the field
                 new_field = CubicSplineField(shape1, kspacing)
-                resample_affine = (self.subsampling[stage] * np.eye(4) /
-                                   self.subsampling[stage-1])
-                resample_affine[3,3] = 1.0
-                #print ("Resampling field:",resample_affine)
+
+                prev_aff_inv = self.f1_ss.get_affine_inv(scale+1)
+                cur_aff = self.f1_ss.get_affine(scale)
+                resample_affine = prev_aff_inv.dot(cur_aff)
                 new_b = vfu.transform_3d_affine(b.astype(np.float64),
                                                 np.array(shape1, dtype=np.int32),
                                                 resample_affine)
@@ -959,8 +1003,8 @@ class OffResonanceFieldEstimator(object):
 
                 bending_energy, bending_grad = field.get_bending_gradient()
                 bending_grad = tps_lambda * np.array(bending_grad)
-                print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
-                print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
+                #print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
+                #print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
 
                 bending_energy *= tps_lambda
                 total_energy = energy + bending_energy
