@@ -850,8 +850,8 @@ cdef class Spline3D:
                     self._get_all_autocorrelations(der[0], der[1], der[2], prods)
 
                     sz_norm = 1.0 / (vox_size[ddir1] * vox_size[ddir2])
-                    sz_norm2 = sz_norm
-                    #sz_norm2 = sz_norm * sz_norm
+                    #sz_norm2 = sz_norm
+                    sz_norm2 = sz_norm * sz_norm
                     if ddir1 == ddir2:
                         mult = 2.0
                     else:
@@ -962,12 +962,12 @@ class CubicSplineField:
 
 
 
-    def get_bending_gradient(self):
+    def get_bending_gradient(self, double[:] vox_size):
         cdef:
             double[:] grad = np.empty(self.coef.size)
             int ncoef = self.coef.shape[0] * self.coef.shape[1] * self.coef.shape[2]
             double energy
-        energy = self.spline3d._get_bending_gradient(self.coef, np.array(self.kspacing, dtype=np.float64),
+        energy = self.spline3d._get_bending_gradient(self.coef, vox_size,
                                                      np.array(self.vol_shape, dtype=np.int32), grad)
         return energy, grad
 

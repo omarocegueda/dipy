@@ -122,7 +122,7 @@ class OppositeBlips_CC(EPIDistortionModel):
                                             db, kspacing, field_shape,
                                             self.radius, kcoef_grad)
 
-        remember_last_iter = False
+        remember_last_iter = True
         if remember_last_iter:
             self.pedir_factor = pedir_factor
             self.w_down = w_down
@@ -254,7 +254,7 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
                                                 kcoef_grad, dtheta)
         self.iter_count += 1
 
-        remember_last_iter = False
+        remember_last_iter = True
         if remember_last_iter:
             self.reorientation_matrix = np.linalg.inv(down_grid2world).T
             self.w_down = w_down
@@ -579,7 +579,7 @@ class OffResonanceFieldEstimator(object):
         elif self.nstages is None:
             self.nstages = len(seq)
         elif self.nstages != len(seq):
-            raise ValueError('Inconsistent multiresolution settings')
+            raise ValueError('Inconsistent multiresolution settings. Expected: %d. Actual: %d'%(self.nstages, len(seq)))
 
     def _set_multires_params(self, level_iters=None, subsampling=None,
                              warp_res=None, fwhm=None, lambdas=None,
@@ -711,7 +711,7 @@ class OffResonanceFieldEstimator(object):
                             current1, Id, f1_pedir, current2, Id, f2_pedir, field)
                 grad = np.array(gr.unwrap_scalar_field(grad))
 
-                bending_energy, bending_grad = field.get_bending_gradient()
+                bending_energy, bending_grad = field.get_bending_gradient(resampled_sp)
                 bending_grad = tps_lambda * np.array(bending_grad)
 
                 bending_energy *= tps_lambda
@@ -845,7 +845,7 @@ class OffResonanceFieldEstimator(object):
                     break
                 grad = np.array(gr.unwrap_scalar_field(grad))
 
-                bending_energy, bending_grad = field.get_bending_gradient()
+                bending_energy, bending_grad = field.get_bending_gradient(resampled_sp)
                 bending_grad = tps_lambda * np.array(bending_grad)
                 print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
                 print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
@@ -952,6 +952,7 @@ class OffResonanceFieldEstimator(object):
             kspacing = np.round(self.warp_res[stage]/resampled_sp)
             kspacing = kspacing.astype(np.int32)
             kspacing[kspacing < 1] = 1
+            #kspacing = np.array([self.warp_res[stage]] * 3, np.int32)
 
             # Create, rescale or keep field as needed
             if field is None:
@@ -989,6 +990,9 @@ class OffResonanceFieldEstimator(object):
 
             self.energy_list = []
             tolerance = 1e-6
+            prev_coef = None
+            prev_theta = None
+            prev_energy = None
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
                 energy, grad, dtheta = self.distortion_model.energy_and_gradient(
@@ -1001,7 +1005,7 @@ class OffResonanceFieldEstimator(object):
                     break
                 grad = np.array(gr.unwrap_scalar_field(grad))
 
-                bending_energy, bending_grad = field.get_bending_gradient()
+                bending_energy, bending_grad = field.get_bending_gradient(resampled_sp)
                 bending_grad = tps_lambda * np.array(bending_grad)
                 #print("Bending grad. range: [%f, %f]"%(bending_grad.min(), bending_grad.max()))
                 #print("Sim. grad. range: [%f, %f]"%(grad.min(), grad.max()))
@@ -1039,6 +1043,18 @@ class OffResonanceFieldEstimator(object):
                         break
                 else:
                     der = np.inf
+
+                if True:
+                    if prev_energy is None or total_energy < prev_energy:
+                        prev_energy = total_energy
+                        prev_coef = b_coeff
+                        prev_theta = theta
+                    else:
+                        b_coeff = prev_coef
+                        theta = prev_theta
+                        total_energy = prev_energy
+                        step_length *= 0.5
                 print("Energy: %f. [%f]"%(total_energy, der))
+
             self.fields.append(field.get_volume())
         return field, theta

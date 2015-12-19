@@ -157,6 +157,8 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
 
     radius = 4
 
+    spacings[:] = 1
+
     up_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
     down_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
 
@@ -169,13 +171,14 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     pedir_down = np.array((0,-1,0), dtype=np.float64)
     distortion_model = OppositeBlips_CC(radius=radius)
     #level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
-    level_iters = [100, 1, 1, 1, 1, 1, 1, 1, 1]
+    #level_iters = [100, 1, 1, 1, 1, 1, 1, 1, 1]
+    level_iters = [100, 100, 100, 100, 50, 25, 25, 20, 10]
     lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
                        0.5, 0.05, 0.05])*400
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
     estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm)
 
-    orfield_coef_fname = 'orfield_coef_new_ss.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_fix_sp.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef = pickle.load(open(orfield_coef_fname, 'r'))
@@ -225,37 +228,48 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
 
     radius = 4
+    spacings_up[:] = 1
+    spacings_down[:] = 1
 
-    #up_affine = np.diag([spacings_up[0], spacings_up[1], spacings_up[2], 1.0])
-    #down_affine = np.diag([spacings_down[0], spacings_down[1], spacings_down[2], 1.0])
-    up_affine = np.eye(4)
-    down_affine = np.eye(4)
+    up_affine = np.diag([spacings_up[0], spacings_up[1], spacings_up[2], 1.0])
+    down_affine = np.diag([spacings_down[0], spacings_down[1], spacings_down[2], 1.0])
+    #up_affine = np.eye(4)
+    #down_affine = np.eye(4)
     #up_affine[:3,:3] = dir_up
     #down_affine[:3,:3] = dir_down
     #up_affine[:3,3] = 0
     #down_affine[:3,3] = 0
 
     spacings = spacings_down.copy()
-    spacings[:] = 1
+    #spacings[:] = 1
     # Preprocess intensities
-    up /= up.mean()
-    down /= down.mean()
+    #up /= up.mean()
+    #down /= down.mean()
 
     # Configure and run orfield estimation
     pedir_up = np.array((0,1,0), dtype=np.float64)
     pedir_down = np.array((0,-1,0), dtype=np.float64)
     distortion_model = OppositeBlips_CC_Motion(radius=radius)
     #level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
-    level_iters = [100, 100, 100, 100, 50, 25, 25, 20, 10]
-    lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-                       0.5, 0.5, 0.5])*100
-    fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
-    step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*2
-    step_lengths = None
-    estimator = OffResonanceFieldEstimator(distortion_model, level_iters=level_iters, lambdas=lambdas, fwhm=fwhm, step_lengths=step_lengths)
+    level_iters = [100, 100, 100, 100, 100, 50, 25, 25, 20, 10]
+    lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+                       0.5, 0.5, 0.5])*10
+    fwhm = np.array([8, 8, 6, 4, 3, 3, 2, 1, 0, 0])
+    step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*2
+    #warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
+    warp_res = np.array([20, 20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
+    subsampling = [4, 2, 2, 2, 2, 2, 1, 1, 1, 1]
+    #warp_res = np.array([6, 5, 4, 3, 2, 3, 2, 2, 2], dtype=np.float64)*spacings[1]
+    estimator = OffResonanceFieldEstimator(distortion_model,
+                                           level_iters=level_iters,
+                                           lambdas=lambdas,
+                                           fwhm=fwhm,
+                                           step_lengths=step_lengths,
+                                           warp_res=warp_res,
+                                           subsampling=subsampling)
 
     #orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
-    orfield_coef_fname = 'orfield_coef_new_ss_motion_id_ll00.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_motion_id_l0_totalvox.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
@@ -430,13 +444,17 @@ def compare_gradients():
 
     radius = 4
 
+
+
     #up_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
     #down_affine = np.diag([spacings[0], spacings[1], spacings[2], 1.0])
-    up_affine = np.eye(4)
-    down_affine = np.eye(4)
+    #up_affine = np.eye(4)
+    #down_affine = np.eye(4)
+    #spacings[:]=1
+
     # Preprocess intensities
-    up /= up.mean()
-    down /= down.mean()
+    #up /= up.mean()
+    #down /= down.mean()
 
     # Configure and run orfield estimation
     pedir_up = np.array((0,1,0), dtype=np.float64)
@@ -448,7 +466,7 @@ def compare_gradients():
     fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0], dtype=np.float64)
     step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*4
     subsampling = np.array([2, 2, 2, 2, 2, 1, 1, 1, 1])
-    warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4])
+    warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4])*1.7
     nstages = len(subsampling)
 
 
