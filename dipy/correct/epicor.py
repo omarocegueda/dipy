@@ -951,7 +951,7 @@ class OffResonanceFieldEstimator(object):
                 #new_b *= ((1.0 * self.subsampling[stage-1]) /
                 #          self.subsampling[stage])
                 # Compute the coefficients associated with the resampled field
-                coef = new_field.spline3d.fit_to_data(new_b, 0.0)
+                coef = new_field.spline3d.fit_to_data(new_b, 0.1)
                 new_field.copy_coefficients(coef)
                 field = new_field
                 b_coeff = gr.unwrap_scalar_field(coef)
@@ -1015,5 +1015,13 @@ class OffResonanceFieldEstimator(object):
 
                 print("Energy: %f (%f + %f). [%f]"%(total_energy, energy, bending_energy, der))
 
+            #self.fields.append(field.get_volume())
             self.fields.append(field.get_volume())
+
+            # Evaluate current bending energy
+            if False:
+                bending_energy, bending_grad = field.get_bending_gradient(resampled_sp)
+                print(">>> Field Shape:", field.coef.shape)
+                print(">>> Bending energy:", bending_energy)
+                rt.plot_slices(field.coef)
         return field, theta

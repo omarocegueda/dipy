@@ -235,19 +235,19 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
     # Configure and run orfield estimation
     distortion_model = OppositeBlips_CC_Motion(radius=radius)
-    #level_iters = [200, 200, 200, 200, 200, 200, 200, 200, 200]
-    level_iters = [100, 100, 100, 100, 50, 50, 50, 30, 20]
-    #lambdas = np.array([0.005,0.001,0.001,0.0015,0.005,0.000000005,0.0000005,0.0000005,0.0000001])
-    lambdas = np.array([0.0, 0.0, 0.0, 0.0, 0.0,
-                        0.00005,0.01,0.01,0.01])*((radius+1)**3)
-    #lambdas = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-    #                   0.5, 0.5, 0.5])*10
-    fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
-    step_lengths = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])*2
-    #warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
-    warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
-    subsampling = [2, 2, 2, 2, 2, 1, 1, 1, 1]
-    #warp_res = np.array([6, 5, 4, 3, 2, 3, 2, 2, 2], dtype=np.float64)*spacings[1]
+    level_iters = [100, 100, 100, 100,
+                   50, 50, 50]
+    #level_iters = [1, 0, 0, 0, 0, 0, 0, 0, 0]
+    lambdas = np.array([0.0, 0.0, 0.0, 0.0,
+                        0.01, 0.01, 0.005])*((radius+1)**3)
+    fwhm = np.array([8, 6, 4, 3,
+                     2, 1, 0])
+    step_lengths = np.array([0.1, 0.1, 0.1, 0.1,
+                             0.1, 0.1, 0.1])*2
+    warp_res = np.array([20, 16, 14, 12,
+                         6, 4, 4], dtype=np.float64)
+    subsampling = [2, 2, 2, 2,
+                   1, 1, 1]
     estimator = OffResonanceFieldEstimator(distortion_model,
                                            level_iters=level_iters,
                                            lambdas=lambdas,
@@ -256,8 +256,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
                                            warp_res=warp_res,
                                            subsampling=subsampling)
 
-    #orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
-    orfield_coef_fname = 'orfield_coef_new_ss_motion_id_l10_totalvox.p'
+    orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
@@ -290,20 +289,21 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     w_down, _m = gr.warp_with_orfield(down, b, pedir_down, Ain,
                                           Aout, Adisp, shape)
 
-    rt.plot_slices(b)
-    overlay_slices(w_down, w_up, slice_type=2)
-    gb = np.zeros(shape=b.shape + (3,), dtype=np.float64)
-    gb[...,0] = orfield.get_volume((1,0,0))
-    gb[...,1] = orfield.get_volume((0,1,0))
-    gb[...,2] = orfield.get_volume((0,0,1))
+    if True:
+        rt.plot_slices(b)
+        overlay_slices(w_down, w_up, slice_type=2)
+        gb = np.zeros(shape=b.shape + (3,), dtype=np.float64)
+        gb[...,0] = orfield.get_volume((1,0,0))
+        gb[...,1] = orfield.get_volume((0,1,0))
+        gb[...,2] = orfield.get_volume((0,0,1))
 
 
-    Jdown = gb[...,0]*pedir_down[0] + gb[...,1]*pedir_down[1] + gb[...,2]*pedir_down[2] + 1
-    Jup = gb[...,0]*pedir_up[0] + gb[...,1]*pedir_up[1] + gb[...,2]*pedir_up[2] + 1
+        Jdown = gb[...,0]*pedir_down[0] + gb[...,1]*pedir_down[1] + gb[...,2]*pedir_down[2] + 1
+        Jup = gb[...,0]*pedir_up[0] + gb[...,1]*pedir_up[1] + gb[...,2]*pedir_up[2] + 1
 
-    Jdown[Jdown<0] = 0
-    Jup[Jup<0] = 0
-    overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
+        Jdown[Jdown<0] = 0
+        Jup[Jup<0] = 0
+        overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
 
 
 
