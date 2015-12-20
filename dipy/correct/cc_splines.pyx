@@ -650,9 +650,9 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                   Transform transform, double[:] theta,
                                   double[:,:,:] kcoef, double[:] dtheta):
     cdef:
-        int ns = f1.shape[0]
-        int nr = f1.shape[1]
-        int nc = f1.shape[2]
+        cnp.npy_intp ns = f1.shape[0]
+        cnp.npy_intp nr = f1.shape[1]
+        cnp.npy_intp nc = f1.shape[2]
         int* ksize = [kernel.shape[0], kernel.shape[1], kernel.shape[2]]
         cnp.npy_intp side = 2 * radius + 1
         int* kcenter = [ksize[0]//2, ksize[1]//2, ksize[2]//2]
@@ -664,11 +664,11 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
         double[:,:] J = None
         double[:] h = None
         double[:] x = np.zeros((3,), dtype=np.float64)
-        int nfactors = 3
+        cnp.npy_intp nfactors = 3
         double[:, :, :, :] factors = np.zeros((2, nr, nc, nfactors), dtype=np.float64)
-        cnp.npy_intp firstc, lastc, firstr, lastr, firsts, lasts, constant_jacobian=0
+        cnp.npy_intp constant_jacobian=0
         cnp.npy_intp sss, ss, rr, cc, prev_sss, prev_rr, prev_cc
-        int s, r, c, i, j, k, ii, jj, kk, i0, i1, j0, j1, k0, k1, sc_s, sc_r, sc_c, sides, sider, sidec, nwindows
+        cnp.npy_intp s, r, c, i, j, k, ii, jj, i0, i1, j0, j1, k0, k1, sc_s, sc_r, sc_c
         double F2bar, F1bar, alpha, beta, gamma, sp_contrib, dF2, dF1, A, B, C, energy
         double factor
 
@@ -685,30 +685,18 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                     J2[s,r,c] = 1.0 + gfield[s,r,c,0]*f2_pe[0]+gfield[s,r,c,1]*f2_pe[1]+gfield[s,r,c,2]*f2_pe[2]
                     F1[s,r,c] = f1[s,r,c] * J1[s, r, c]
                     F2[s,r,c] = f2[s,r,c] * J2[s, r, c]
-    #print("general: J1[%f, %f], J2[%f, %f]"%(np.min(J1), np.max(J1), np.min(J2), np.max(J2)))
-    #print("gfield: [%f, %f]"%(np.min(gfield), np.max(gfield)))
-    #print("f1_pe: [%f, %f]"%(np.min(f1_pe), np.max(f1_pe)))
-    #print("f2_pe: [%f, %f]"%(np.min(f2_pe), np.max(f2_pe)))
 
     # Precompute window sums
     temp = precompute_cc_factors_3d(F1, F2, radius)
     with nogil:
-        nwindows = 0
         energy = 0
         sss = 1
         for s in range(ns):
             ss = _mod(s - radius, ns)
             sss = 1 - sss
-            firsts = _int_max(0, ss - radius)
-            lasts = _int_min(ns - 1, ss + radius)
-            sides = (lasts - firsts + 1)
             for r in range(nr):
                 rr = _mod(r - radius, nr)
-                firstr = _int_max(0, rr - radius)
-                lastr = _int_min(nr - 1, rr + radius)
-                sider = (lastr - firstr + 1)
                 for c in range(nc):
-                    nwindows += 1
                     cc = _mod(c - radius, nc)
                     # New corner
                     _increment_factors_epicor(factors, temp, sss, rr, cc, s, r, c, 0)
@@ -759,12 +747,6 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                         _increment_factors_epicor(factors, temp, sss, rr, cc, s, r, c-side, -1)
                     # Compute final factors
                     if ss>=radius and rr>=radius and cc>=radius:
-
-                        firstc = _int_max(0, cc - radius)
-                        lastc = _int_min(nc - 1, cc + radius)
-                        sidec = (lastc - firstc + 1)
-                        cnt = sides*sider*sidec
-
                         # Iterate over all splines affected by (ss, rr, cc)
                         # The first-order rectangle integrals are at temp[ss, rr, cc, :]
                         # The second-order rectangle integrals are at factors[sss, rr, cc, :]
@@ -775,7 +757,6 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                         B = temp[ss, rr, cc, 3]  # moving sq norm: B
                         C = temp[ss, rr, cc, 4]  # static sq norm: C
 
-                        #if (B*B*C > 1e-5) and (C*C*B > 1e-5):
                         if (B*C > 1e-7):
                             energy += (A * A) / (B * C)
 
@@ -828,11 +809,11 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
 
                                         # Accumulate contribution to motion gradient
                                         factor = (alpha * F1bar - gamma * F2bar)
-                                        # Must multiply the grid point by field's grid2world
-                                        x[0] = _apply_affine_3d_x0(ss, rr, cc, 1, fieldg2w)
-                                        x[1] = _apply_affine_3d_x1(ss, rr, cc, 1, fieldg2w)
-                                        x[2] = _apply_affine_3d_x2(ss, rr, cc, 1, fieldg2w)
+
                                         if constant_jacobian == 0:
+                                            x[0] = ss
+                                            x[1] = rr
+                                            x[2] = cc
                                             constant_jacobian = transform._jacobian(theta, x, J)
 
                                         for jj in range(n):
@@ -841,15 +822,14 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                                 h[jj] += df2[ss, rr, cc, ii] * J[ii,jj]
                                             h[jj] *= J2[ss,rr,cc]
                                             dtheta[jj] += factor * h[jj]
-
         for k in range(n):
-            dtheta[k] = -2.0 * dtheta[k] / nwindows
+            dtheta[k] = -2.0 * dtheta[k]
 
         for k in range(kcoef.shape[0]):
             for i in range(kcoef.shape[1]):
                 for j in range(kcoef.shape[2]):
-                    kcoef[k, i, j] = -2.0 * kcoef[k, i, j] / nwindows
-        energy = 1-energy/nwindows
+                    kcoef[k, i, j] = -2.0 * kcoef[k, i, j]
+        energy = -energy
     return energy
 
 

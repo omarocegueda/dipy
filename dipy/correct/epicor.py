@@ -165,9 +165,6 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         r""" The phase encode directions must be normalized and
         given in physical space coordinates
         """
-        #up_pedir /= npl.norm(up_pedir)
-        #down_pedir /= npl.norm(down_pedir)
-
         # Evaluate the field and its gradient on the curret grid
         b  = np.array(field.get_volume((0,0,0))).astype(np.float64)
         gb = np.empty(b.shape + (3,), dtype=np.float64)
@@ -189,55 +186,33 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         kspacing = field.kspacing
         field_shape = field.grid_shape
 
-        # Compute image gradients
-        grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
-        grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
-
-        for i, grad in enumerate(sp.gradient(up)):
-            grad_up[..., i] = grad
-
-        for i, grad in enumerate(sp.gradient(down)):
-            grad_down[..., i] = grad
-
         # Get the warped images considering motion and off-resonance field
         R = self.transform.param_to_matrix(theta)
 
         Ain = None
-        Aout = npl.inv(up_grid2world).dot(R.dot(field_grid2world))
-        Adisp = npl.inv(up_grid2world)
+        Aout = npl.inv(up_grid2world).dot(field_grid2world).dot(R)
+        Adisp = None
 
         w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
                                         Aout, Adisp, current_shape)
-        wgrad_up = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
-        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
-        # Reorient to physical space
-        debug = False
-        if debug:
-            print("Skip reorientation")
-        else:
-            vfu.reorient_vector_field_3d(wgrad_up, np.linalg.inv(up_grid2world).T)
-
 
         Ain = None
         Aout = npl.inv(down_grid2world).dot(field_grid2world)
-        Adisp = npl.inv(down_grid2world)
+        Adisp = None
 
         w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
                                           Aout, Adisp, current_shape)
-        wgrad_down = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
-        gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
-        # Reorient to physical space
-        if debug:
-            print("Skip reorientation")
-        else:
-            vfu.reorient_vector_field_3d(wgrad_down, np.linalg.inv(down_grid2world).T)
 
-        if debug:
-            if self.iter_count % 10 == 0:
-                rt.plot_slices(gb[...,1])
-                #rt.plot_slices(b)
-                #rt.overlay_slices(w_down, w_up, slice_type=2)
-                #rt.overlay_slices(grad_down[...,1], grad_up[...,1], slice_type=2)
+        # Compute image gradients
+        wgrad_up = np.empty(shape=(b.shape)+(3,), dtype=np.float64)
+        wgrad_down = np.empty(shape=(b.shape)+(3,), dtype=np.float64)
+
+        for i, grad in enumerate(sp.gradient(w_up)):
+            wgrad_up[..., i] = grad
+
+        for i, grad in enumerate(sp.gradient(w_down)):
+            wgrad_down[..., i] = grad
+
         # Allocate space for gradients and call
         kcoef_grad = np.zeros_like(field.coef)
         dtheta = np.zeros_like(theta)
@@ -254,7 +229,7 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
                                                 kcoef_grad, dtheta)
         self.iter_count += 1
 
-        remember_last_iter = True
+        remember_last_iter = False
         if remember_last_iter:
             self.reorientation_matrix = np.linalg.inv(down_grid2world).T
             self.w_down = w_down
@@ -263,8 +238,6 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
             self.up_grid2world = up_grid2world
             self.down_pedir = down_pedir
             self.up_pedir = up_pedir
-            self.grad_down = grad_down
-            self.grad_up = grad_up
             self.wgrad_down = wgrad_down
             self.wgrad_up = wgrad_up
             self.kernel = kernel
@@ -508,7 +481,7 @@ class OffResonanceFieldEstimator(object):
         self._set_multires_params(level_iters, subsampling, warp_res,
                                   fwhm, lambdas, step_lengths)
         self.energy_list = []
-        self.energy_window = 12
+        self.energy_window = 5
 
     def _approximate_derivative_direct(self, x, y):
         r"""Derivative of the degree-2 polynomial fit of the given x, y pairs
@@ -990,9 +963,6 @@ class OffResonanceFieldEstimator(object):
 
             self.energy_list = []
             tolerance = 1e-6
-            prev_coef = None
-            prev_theta = None
-            prev_energy = None
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
                 energy, grad, dtheta = self.distortion_model.energy_and_gradient(
@@ -1012,11 +982,8 @@ class OffResonanceFieldEstimator(object):
 
                 bending_energy *= tps_lambda
                 total_energy = energy + bending_energy
-                self.energy_list.append(total_energy)
                 #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
                 step = -1 * (grad + bending_grad)
-
-
 
                 #print(">>>>>>>>>>>>>>>>>> ", np.abs(step).max())
                 #if np.abs(step).max() > 1:
@@ -1026,16 +993,17 @@ class OffResonanceFieldEstimator(object):
                     step = step_length * step
 
                 if np.abs(dtheta).max() > 1:
-                    theta_step = -0.05 * step_length * (dtheta/np.abs(dtheta).max())
+                    theta_step = -0.01 * (dtheta/np.abs(dtheta).max())
                 else:
-                    theta_step = -0.05 * step_length * dtheta
+                    theta_step = -0.01 * dtheta
 
                 theta += theta_step
-                print("Theta:", theta)
                 if b_coeff is None:
                     b_coeff = step
                 else:
                     b_coeff += step
+
+                self.energy_list.append(total_energy)
                 field.copy_coefficients(b_coeff)
                 if len(self.energy_list)>=self.energy_window:
                     der = self._get_energy_derivative()
@@ -1043,18 +1011,9 @@ class OffResonanceFieldEstimator(object):
                         break
                 else:
                     der = np.inf
+                print("Theta:", theta)
 
-                if True:
-                    if prev_energy is None or total_energy < prev_energy:
-                        prev_energy = total_energy
-                        prev_coef = b_coeff
-                        prev_theta = theta
-                    else:
-                        b_coeff = prev_coef
-                        theta = prev_theta
-                        total_energy = prev_energy
-                        step_length *= 0.5
-                print("Energy: %f. [%f]"%(total_energy, der))
+                print("Energy: %f (%f + %f). [%f]"%(total_energy, energy, bending_energy, der))
 
             self.fields.append(field.get_volume())
         return field, theta

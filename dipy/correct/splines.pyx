@@ -851,18 +851,11 @@ cdef class Spline3D:
 
                     sz_norm = 1.0 / (vox_size[ddir1] * vox_size[ddir2])
                     #sz_norm2 = sz_norm
-                    sz_norm2 = sz_norm * sz_norm
+                    #sz_norm2 = sz_norm * sz_norm
                     if ddir1 == ddir2:
-                        mult = 2.0
+                        mult = 1.0
                     else:
-                        mult = 4.0
-
-                    # Accumulate this second order derivative's energy
-                    # Iterate over all voxels
-                    #for i in range(vol_shape[0]):
-                    #    for j in range(vol_shape[1]):
-                    #        for k in range(vol_shape[2]):
-                    #            energy += 0.5 * mult * sz_norm2 * vol[i,j,k] * vol[i,j,k]
+                        mult = 2.0
 
                     # Accumulate contributions to the gradient
                     # Iterate over all coefficients
@@ -884,10 +877,11 @@ cdef class Spline3D:
                                             idx = (ii - i + cx)*nny*nnz +\
                                                   (jj - j + cy)*nnz +\
                                                   (kk - k + cz)
-                                            grad[row] += mult * sz_norm2 * coef[ii,jj,kk] * prods[idx]
-                                grad[row] /= nvox
+                                            grad[row] += 2.0 * mult * sz_norm2 * coef[ii,jj,kk] * prods[idx]
+                                            energy += coef[i,j,k] * mult * sz_norm2 * coef[ii,jj,kk] * prods[idx]
+                                #grad[row] /= nvox
                                 row += 1
-        energy /= nvox
+        #energy /= nvox
         return energy
 
 
