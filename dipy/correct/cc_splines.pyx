@@ -664,6 +664,7 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
         double[:,:] J = None
         double[:] h = None
         double[:] x = np.zeros((3,), dtype=np.float64)
+        double[:] rot_center = np.zeros((3,), dtype=np.float64)
         cnp.npy_intp nfactors = 3
         double[:, :, :, :] factors = np.zeros((2, nr, nc, nfactors), dtype=np.float64)
         cnp.npy_intp constant_jacobian=0
@@ -677,6 +678,9 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
     h = np.zeros((n,), dtype=np.float64)
     dtheta[:] = 0
     kcoef[...] = 0
+    rot_center[0] = 0.5 * ns
+    rot_center[1] = 0.5 * nr
+    rot_center[2] = 0.5 * nc
     with nogil:
         for s in range(ns):
             for r in range(nr):
@@ -810,10 +814,10 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                         # Accumulate contribution to motion gradient
                                         factor = (alpha * F1bar - gamma * F2bar)
 
-                                        if constant_jacobian == 0:
-                                            x[0] = ss
-                                            x[1] = rr
-                                            x[2] = cc
+                                        if theta is not None and constant_jacobian == 0:
+                                            x[0] = ss - rot_center[0]
+                                            x[1] = rr - rot_center[1]
+                                            x[2] = cc - rot_center[2]
                                             constant_jacobian = transform._jacobian(theta, x, J)
 
                                         for jj in range(n):

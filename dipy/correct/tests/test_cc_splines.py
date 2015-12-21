@@ -256,7 +256,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
                                            warp_res=warp_res,
                                            subsampling=subsampling)
 
-    orfield_coef_fname = 'orfield_coef_new_ss_motion.p'
+    orfield_coef_fname = 'orfield_coef_rigid_multires.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
@@ -266,15 +266,14 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
         orfield = CubicSplineField(up.shape, kspacing)
         orfield.copy_coefficients(coef)
     else:
-        orfield, theta = estimator.optimize_with_ss_motion(down, down_affine, pedir_down, up, up_affine, pedir_up, spacings)
-        pickle.dump(tuple([np.array(orfield.coef), theta]), open(orfield_coef_fname, 'w'))
+        orfield, R = estimator.optimize_with_ss_motion(down, down_affine, pedir_down, up, up_affine, pedir_up, spacings)
+        pickle.dump(tuple([np.array(orfield.coef), R]), open(orfield_coef_fname, 'w'))
 
     # Warp and modulte images
     b  = np.array(orfield.get_volume((0, 0, 0)))
 
     shape = np.array(down.shape, dtype=np.int32)
 
-    R = distortion_model.transform.param_to_matrix(theta)
     Ain = None
     Aout = npl.inv(up_affine).dot(down_affine).dot(R)
     Adisp = None

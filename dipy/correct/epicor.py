@@ -153,9 +153,9 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
             radius of the local window of the CC metric. Default is 4.
         """
         self.radius = radius
-        self.transform = TranslationTransform3D()
+        self.transform = RigidTransform3D()
+        #self.transform = TranslationTransform3D()
         self.iter_count = 0
-        #self.transform = RigidTransform3D()
 
     def energy_and_gradient(self,
                             down, down_grid2world, down_pedir, down_spacings,
@@ -187,7 +187,10 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         field_shape = field.grid_shape
 
         # Get the warped images considering motion and off-resonance field
-        R = self.transform.param_to_matrix(theta)
+        if theta is not None:
+            R = self.transform.param_to_matrix(theta)
+        else:
+            R = np.eye(4)
 
         Ain = None
         Aout = npl.inv(up_grid2world).dot(field_grid2world).dot(R)
@@ -215,7 +218,8 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
 
         # Allocate space for gradients and call
         kcoef_grad = np.zeros_like(field.coef)
-        dtheta = np.zeros_like(theta)
+        n = self.transform.get_number_of_parameters()
+        dtheta = np.zeros(n, dtype=np.float64)
         energy = cc_splines_grad_epicor_general(w_down, w_up,
                                                 down_grid2world, up_grid2world,
                                                 down_pedir, up_pedir,
@@ -848,25 +852,6 @@ class OffResonanceFieldEstimator(object):
     def optimize_with_ss_motion(self, f1, f1_affine, f1_pedir,
                                f2, f2_affine, f2_pedir,
                                spacings):
-        if False:
-            # Bring the center of the moving image to the origin
-            c_f1 = tuple(0.5 * np.array(f1.shape, dtype=np.float64))
-            c_f1 = f1_affine.dot(c_f1+(1,))
-            correction_f1 = np.eye(4, dtype=np.float64)
-            correction_f1[:3,3] = -1 * c_f1[:3]
-            centered_f1_aff = correction_f1.dot(f1_affine)
-            f1_affine = centered_f1_aff
-
-            # Bring the center of the static image to the origin
-            c_f2 = tuple(0.5 * np.array(f2.shape, dtype=np.float64))
-            c_f2 = f2_affine.dot(c_f2+(1,))
-            correction_f2 = np.eye(4, dtype=np.float64)
-            correction_f2[:3,3] = -1 * c_f2[:3]
-            centered_f2_aff = correction_f2.dot(f2_affine)
-            f2_affine = centered_f2_aff
-
-
-
 
         fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
         self.f1_ss = IsotropicScaleSpace(f1,
@@ -886,6 +871,7 @@ class OffResonanceFieldEstimator(object):
         b_coeff = None
         self.fields = []
         self.images = []
+        prealign = np.eye(4)
         theta = self.distortion_model.transform.get_identity_parameters()
         for stage in range(self.nstages):
             scale = self.nstages - 1 - stage
@@ -897,10 +883,6 @@ class OffResonanceFieldEstimator(object):
             affine1 = self.f1_ss.get_affine(scale)
             f1_smooth = self.f1_ss.get_image(scale)
             f1_mask = (f1_smooth>0).astype(np.int32)
-            #f1_mask = (f1>0).astype(np.int32)
-            #aff = AffineMap(None, shape1, affine1, f1.shape, f1_affine)
-            #current1 = aff.transform(f1_smooth)
-
 
             # Resample second image
             # In the EPI vs. Non-EPI case, this is the non-epi image,
@@ -909,14 +891,6 @@ class OffResonanceFieldEstimator(object):
             affine2 = self.f2_ss.get_affine(scale)
             f2_smooth = self.f2_ss.get_image(scale)
             f2_mask = (f2_smooth>0).astype(np.int32)
-            #f2_mask = (f2>0).astype(np.int32)
-            # We must warp f2 towards [shape1, affine1]
-            #aff = AffineMap(None, shape1, affine1, f2.shape, f2_affine)
-            #current2 = aff.transform(f2_smooth)
-
-
-            #self.images.append([current1, current2])
-            #continue
 
             resampled_sp = self.subsampling[stage] * spacings
             tps_lambda = self.lambdas[stage]
@@ -947,26 +921,28 @@ class OffResonanceFieldEstimator(object):
                                                 np.array(shape1, dtype=np.int32),
                                                 resample_affine)
                 new_b = np.array(new_b, dtype=np.float64)
-                # Scale to new voxel size
-                #new_b *= ((1.0 * self.subsampling[stage-1]) /
-                #          self.subsampling[stage])
                 # Compute the coefficients associated with the resampled field
                 coef = new_field.spline3d.fit_to_data(new_b, 0.1)
                 new_field.copy_coefficients(coef)
                 field = new_field
                 b_coeff = gr.unwrap_scalar_field(coef)
-            else:
-                pass
-                #print ("Keeping field as is")
+                # prealign is defined on the previous scale, we need to
+                # change coordinates to this scale
+                prealign =  npl.inv(resample_affine).dot(prealign).dot(resample_affine)
 
             # Start gradient descent
-
             self.energy_list = []
             tolerance = 1e-6
+            if self.subsampling[stage] < 2:
+                # Do not estimate motion at full resolution
+                theta = None
+
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
+                # f1 may be regarded as being moved by the rigid transform
+                # in physical space
                 energy, grad, dtheta = self.distortion_model.energy_and_gradient(
-                            f1_smooth, f1_affine, f1_pedir, spacings,
+                            f1_smooth, f1_affine.dot(prealign), f1_pedir, spacings,
                             f2_smooth, f2_affine, f2_pedir, spacings, theta,
                             field, affine1,
                             f1_mask, f2_mask)
@@ -992,12 +968,15 @@ class OffResonanceFieldEstimator(object):
                 else:
                     step = step_length * step
 
-                if np.abs(dtheta).max() > 1:
-                    theta_step = -0.01 * (dtheta/np.abs(dtheta).max())
-                else:
-                    theta_step = -0.01 * dtheta
+                if theta is not None:
+                    max_theta = np.arcsin(0.05/(2.0 * np.max(shape1)))
+                    theta_step_length = np.array([max_theta, max_theta, max_theta, 0.01, 0.001, 0.001])
+                    dtheta[:3] /= np.abs(dtheta[:3]).max()
+                    dtheta[3:] /= np.abs(dtheta[3:]).max()
+                    theta_step = -1.0 * theta_step_length * dtheta
+                    theta += theta_step
+                    print("Theta:", theta)
 
-                theta += theta_step
                 if b_coeff is None:
                     b_coeff = step
                 else:
@@ -1011,11 +990,21 @@ class OffResonanceFieldEstimator(object):
                         break
                 else:
                     der = np.inf
-                print("Theta:", theta)
 
                 print("Energy: %f (%f + %f). [%f]"%(total_energy, energy, bending_energy, der))
+            # Get matrix representation of theta, according to transform
+            # Prevent theta from being applied again, now `prealign` is
+            # the full rigid transform at this scale.
+            if theta is not None:
+                R = self.distortion_model.transform.param_to_matrix(theta)
+                # move the center of rotation to the geometric center of the image
+                c = np.array([shape1[0], shape1[1], shape1[2]]) * 0.5
+                R[:3, 3] += (c - R[:3,:3].dot(c))
 
-            #self.fields.append(field.get_volume())
+                # Make prealign contain the full rigid transform
+                prealign = prealign.dot(R)
+                theta = self.distortion_model.transform.get_identity_parameters()
+
             self.fields.append(field.get_volume())
 
             # Evaluate current bending energy
@@ -1024,4 +1013,4 @@ class OffResonanceFieldEstimator(object):
                 print(">>> Field Shape:", field.coef.shape)
                 print(">>> Bending energy:", bending_energy)
                 rt.plot_slices(field.coef)
-        return field, theta
+        return field, prealign
