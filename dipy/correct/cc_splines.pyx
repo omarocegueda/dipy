@@ -836,12 +836,3 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
         energy = -energy
     return energy
 
-
-
-
-
-
-
-
-
-

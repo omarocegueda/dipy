@@ -211,6 +211,17 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS():
     #overlay_slices(w_down*(1.0-db), w_up*(1+db), slice_type=2)
 
 
+def extend(vol):
+    margin = 8
+    half = margin // 2
+    new_shape = np.array(vol.shape) + margin
+    new_vol = np.zeros(shape = new_shape, dtype=np.float64)
+
+    new_vol.shape
+    new_vol[half:-half, half:-half, half:-half] = vol
+    return new_vol
+
+
 
 
 def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
@@ -218,10 +229,14 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     up_nib = nib.load(up_fname)
     up_affine = up_nib.get_affine()
     up = up_nib.get_data().squeeze().astype(np.float64)
+    up = extend(up)
+    up /= up.mean()
 
     down_nib = nib.load(down_fname)
     down_affine = down_nib.get_affine()
     down = down_nib.get_data().squeeze().astype(np.float64)
+    down = extend(down)
+    down /= down.mean()
 
     pedir_up = np.array((0,1,0), dtype=np.float64)
     pedir_down = np.array((0,-1,0), dtype=np.float64)
@@ -235,15 +250,14 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
     # Configure and run orfield estimation
     distortion_model = OppositeBlips_CC_Motion(radius=radius)
-    level_iters = [100, 100, 100, 100,
-                   50, 50, 50]
-    #level_iters = [1, 0, 0, 0, 0, 0, 0, 0, 0]
+    level_iters = np.array([300, 300, 300, 300,
+                            250, 200, 100], dtype=np.int32)
     lambdas = np.array([0.0, 0.0, 0.0, 0.0,
-                        0.01, 0.01, 0.005])*((radius+1)**3)
+                        0.01, 0.01, 0.005])*((radius+1)**3)*0.5
     fwhm = np.array([8, 6, 4, 3,
-                     2, 1, 0])
-    step_lengths = np.array([0.1, 0.1, 0.1, 0.1,
-                             0.1, 0.1, 0.1])*2
+                     2, 1, 0], dtype=np.float64)
+    step_lengths = np.array([0.1, 0.05, 0.05, 0.5,
+                             0.05, 0.05, 0.05])
     warp_res = np.array([20, 16, 14, 12,
                          6, 4, 4], dtype=np.float64)
     subsampling = [2, 2, 2, 2,
@@ -256,10 +270,10 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
                                            warp_res=warp_res,
                                            subsampling=subsampling)
 
-    orfield_coef_fname = 'orfield_coef_rigid_multires.p'
+    orfield_coef_fname = 'orfield_coef_trans_spsq_r4_postbest.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
-        coef, theta = pickle.load(open(orfield_coef_fname, 'r'))
+        coef, R = pickle.load(open(orfield_coef_fname, 'r'))
         kspacing = np.round(estimator.warp_res[-1]/spacings)
         kspacing = kspacing.astype(np.int32)
         kspacing[kspacing < 1] = 1
@@ -276,14 +290,14 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
     Ain = None
     Aout = npl.inv(up_affine).dot(down_affine).dot(R)
-    Adisp = None
+    Adisp = Aout
 
     w_up, _m = gr.warp_with_orfield(up, b, pedir_up, Ain,
                                         Aout, Adisp, shape)
 
     Ain = None
     Aout = npl.inv(down_affine).dot(down_affine)
-    Adisp = None
+    Adisp = Aout
 
     w_down, _m = gr.warp_with_orfield(down, b, pedir_down, Ain,
                                           Aout, Adisp, shape)
@@ -299,10 +313,24 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
         Jdown = gb[...,0]*pedir_down[0] + gb[...,1]*pedir_down[1] + gb[...,2]*pedir_down[2] + 1
         Jup = gb[...,0]*pedir_up[0] + gb[...,1]*pedir_up[1] + gb[...,2]*pedir_up[2] + 1
-
-        Jdown[Jdown<0] = 0
-        Jup[Jup<0] = 0
         overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
+
+    if False:
+        d0 = estimator.f1_ss.get_image(6)
+        u0 = estimator.f2_ss.get_image(6)
+        Ain = None
+        Aout = npl.inv(up_affine).dot(down_affine).dot(R)
+        Adisp = Aout
+        w_up, _m = gr.warp_with_orfield(u0, b, pedir_up, Ain,
+                                            Aout, Adisp, shape)
+        Ain = None
+        Aout = npl.inv(down_affine).dot(down_affine)
+        Adisp = Aout
+
+        w_down, _m = gr.warp_with_orfield(d0, b, pedir_down, Ain,
+                                              Aout, Adisp, shape)
+        overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
+
 
 
 

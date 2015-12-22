@@ -850,8 +850,8 @@ cdef class Spline3D:
                     self._get_all_autocorrelations(der[0], der[1], der[2], prods)
 
                     sz_norm = 1.0 / (vox_size[ddir1] * vox_size[ddir2])
-                    #sz_norm2 = sz_norm
-                    #sz_norm2 = sz_norm * sz_norm
+                    sz_norm2 = sz_norm
+                    sz_norm2 = sz_norm * sz_norm
                     if ddir1 == ddir2:
                         mult = 1.0
                     else:

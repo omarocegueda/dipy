@@ -153,8 +153,8 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
             radius of the local window of the CC metric. Default is 4.
         """
         self.radius = radius
-        self.transform = RigidTransform3D()
-        #self.transform = TranslationTransform3D()
+        #self.transform = RigidTransform3D()
+        self.transform = TranslationTransform3D()
         self.iter_count = 0
 
     def energy_and_gradient(self,
@@ -186,6 +186,16 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         kspacing = field.kspacing
         field_shape = field.grid_shape
 
+        # Compute gradients
+        grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
+        grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
+
+        for i, grad in enumerate(sp.gradient(up)):
+            grad_up[..., i] = grad
+
+        for i, grad in enumerate(sp.gradient(down)):
+            grad_down[..., i] = grad
+
         # Get the warped images considering motion and off-resonance field
         if theta is not None:
             R = self.transform.param_to_matrix(theta)
@@ -194,27 +204,49 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
 
         Ain = None
         Aout = npl.inv(up_grid2world).dot(field_grid2world).dot(R)
-        Adisp = None
+        Adisp = Aout
+        #Adisp = np.eye(4)
+        #_dir, _sp = get_direction_and_spacings(Aout, 3)
+        #Adisp[:3,:3] = _dir[:,:]
 
         w_up, _m = gr.warp_with_orfield(up, b, up_pedir, Ain,
                                         Aout, Adisp, current_shape)
+        wgrad_up = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
+        gr.resample_vector_field(grad_up, b, up_pedir, Ain, Aout, Adisp, current_shape, wgrad_up)
 
         Ain = None
         Aout = npl.inv(down_grid2world).dot(field_grid2world)
-        Adisp = None
+        Adisp = Aout
+        #Adisp = np.eye(4)
+        #_dir, _sp = get_direction_and_spacings(Aout, 3)
+        #Adisp[:3,:3] = _dir[:,:]
 
         w_down, _m = gr.warp_with_orfield(down, b, down_pedir, Ain,
                                           Aout, Adisp, current_shape)
+        wgrad_down = np.zeros(shape=tuple(current_shape)+(3,), dtype=np.float64)
+        gr.resample_vector_field(grad_down, b, down_pedir, Ain, Aout, Adisp, current_shape, wgrad_down)
+
+
+        #if self.iter_count%10 == 0 :
+        #    rt.overlay_slices(w_down, w_up, slice_type=2)
 
         # Compute image gradients
-        wgrad_up = np.empty(shape=(b.shape)+(3,), dtype=np.float64)
-        wgrad_down = np.empty(shape=(b.shape)+(3,), dtype=np.float64)
+        #out2up = npl.inv(up_grid2world).dot(field_grid2world).dot(R)
+        #wgrad_up = np.zeros(shape=up.shape+(3,), dtype=np.float64)
+        #gr.gradient_warped_3d(up, b, up_pedir, out2up, wgrad_up)
 
-        for i, grad in enumerate(sp.gradient(w_up)):
-            wgrad_up[..., i] = grad
+        #out2down = npl.inv(down_grid2world).dot(field_grid2world)
+        #wgrad_down = np.zeros(shape=down.shape+(3,), dtype=np.float64)
+        #gr.gradient_warped_3d(down, b, down_pedir, out2down, wgrad_down)
 
-        for i, grad in enumerate(sp.gradient(w_down)):
-            wgrad_down[..., i] = grad
+        #wgrad_up = np.empty(shape=(b.shape)+(3,), dtype=np.float64)
+        #wgrad_down = np.empty(shape=(b.shape)+(3,), dtype=np.float64)
+
+        #for i, grad in enumerate(sp.gradient(w_up)):
+        #    wgrad_up[..., i] = grad
+
+        #for i, grad in enumerate(sp.gradient(w_down)):
+        #    wgrad_down[..., i] = grad
 
         # Allocate space for gradients and call
         kcoef_grad = np.zeros_like(field.coef)
@@ -854,15 +886,18 @@ class OffResonanceFieldEstimator(object):
                                spacings):
 
         fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+        sigmas = (self.fwhm / fwhm2sigma)
+        sigmas /= np.max(spacings)
+        sigmas = np.sqrt(sigmas)
         self.f1_ss = IsotropicScaleSpace(f1,
                                          self.subsampling,
-                                         self.fwhm / fwhm2sigma,
+                                         sigmas,
                                          f1_affine,
                                          spacings,
                                          False)
         self.f2_ss = IsotropicScaleSpace(f2,
                                          self.subsampling,
-                                         self.fwhm / fwhm2sigma,
+                                         sigmas,
                                          f2_affine,
                                          spacings,
                                          False)
@@ -891,6 +926,8 @@ class OffResonanceFieldEstimator(object):
             affine2 = self.f2_ss.get_affine(scale)
             f2_smooth = self.f2_ss.get_image(scale)
             f2_mask = (f2_smooth>0).astype(np.int32)
+
+            #rt.overlay_slices(f1_smooth, f2_smooth, slice_type=2)
 
             resampled_sp = self.subsampling[stage] * spacings
             tps_lambda = self.lambdas[stage]
@@ -921,6 +958,8 @@ class OffResonanceFieldEstimator(object):
                                                 np.array(shape1, dtype=np.int32),
                                                 resample_affine)
                 new_b = np.array(new_b, dtype=np.float64)
+                new_b *= ((1.0 * self.subsampling[stage-1]) /
+                          self.subsampling[stage])
                 # Compute the coefficients associated with the resampled field
                 coef = new_field.spline3d.fit_to_data(new_b, 0.1)
                 new_field.copy_coefficients(coef)
@@ -932,11 +971,14 @@ class OffResonanceFieldEstimator(object):
 
             # Start gradient descent
             self.energy_list = []
-            tolerance = 1e-6
-            if self.subsampling[stage] < 2:
+            tolerance = 0
+            #if self.subsampling[stage] < 2:
                 # Do not estimate motion at full resolution
-                theta = None
+            #    theta = None
 
+            best_coeff = None
+            best_theta = None
+            best_energy = None
             for it in range(self.level_iters[stage]):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
                 # f1 may be regarded as being moved by the rigid transform
@@ -958,6 +1000,10 @@ class OffResonanceFieldEstimator(object):
 
                 bending_energy *= tps_lambda
                 total_energy = energy + bending_energy
+                if best_energy is None or (total_energy < best_energy):
+                    best_energy = total_energy
+                    best_coeff = b_coeff
+                    best_theta = theta
                 #print("Energy: %f [data] + %f [reg] = %f"%(energy, bending_energy, total_energy))
                 step = -1 * (grad + bending_grad)
 
@@ -969,10 +1015,15 @@ class OffResonanceFieldEstimator(object):
                     step = step_length * step
 
                 if theta is not None:
-                    max_theta = np.arcsin(0.05/(2.0 * np.max(shape1)))
-                    theta_step_length = np.array([max_theta, max_theta, max_theta, 0.01, 0.001, 0.001])
-                    dtheta[:3] /= np.abs(dtheta[:3]).max()
-                    dtheta[3:] /= np.abs(dtheta[3:]).max()
+                    has_rotation = len(dtheta)>3
+                    if has_rotation:
+                        max_theta = np.arcsin(0.05/(2.0 * np.max(shape1)))
+                        theta_step_length = np.array([max_theta, max_theta, max_theta, 0.01, 0.001, 0.001])
+                        dtheta[:3] /= np.abs(dtheta[:3]).max()
+                        dtheta[3:] /= np.abs(dtheta[3:]).max()
+                    else:
+                        theta_step_length = np.array([0.01, 0.0, 0.001])
+                        dtheta /= np.abs(dtheta).max()
                     theta_step = -1.0 * theta_step_length * dtheta
                     theta += theta_step
                     print("Theta:", theta)
@@ -992,6 +1043,10 @@ class OffResonanceFieldEstimator(object):
                     der = np.inf
 
                 print("Energy: %f (%f + %f). [%f]"%(total_energy, energy, bending_energy, der))
+            if best_coeff is not None:
+                b_coeff = best_coeff
+                field.copy_coefficients(b_coeff)
+                theta = best_theta
             # Get matrix representation of theta, according to transform
             # Prevent theta from being applied again, now `prealign` is
             # the full rigid transform at this scale.

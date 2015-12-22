@@ -1554,3 +1554,64 @@ def regrid(floating[:,:,:]vol, double[:] factors, int[:] new_shape):
 
                     _interpolate_scalar_3d(vol, kk, ii, jj, &out[k,i,j])
     return out
+
+
+def gradient_warped_3d(double[:, :, :] img, double[:,:,:] field,
+                       double[:] pedir, double[:, :] out2img,
+                       double[:, :, :, :] out):
+    cdef:
+        int nslices = out.shape[0]
+        int nrows = out.shape[1]
+        int ncols = out.shape[2]
+        int i, j, k, in_flag
+        double tmp
+        double[:] x = np.empty(shape=(3,), dtype=np.float64)
+        double[:] dx = np.empty(shape=(3,), dtype=np.float64)
+        double[:] q = np.empty(shape=(3,), dtype=np.float64)
+    with nogil:
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    # Compute coordinates of index (k, i, j) in physical space
+                    x[0] = k
+                    x[1] = i
+                    x[2] = j
+                    dx[:] = x[:]
+                    for p in range(3):
+                        # Compute coordinates of point dx on img's grid
+                        dx[p] = x[p] - 0.25
+                        q[0] = _apply_affine_3d_x0(dx[0], dx[1], dx[2], 1,
+                                                   out2img)
+                        q[1] = _apply_affine_3d_x1(dx[0], dx[1], dx[2], 1,
+                                                   out2img)
+                        q[2] = _apply_affine_3d_x2(dx[0], dx[1], dx[2], 1,
+                                                   out2img)
+                        q[0] += pedir[0] * field[k, i, j]
+                        q[1] += pedir[1] * field[k, i, j]
+                        q[2] += pedir[2] * field[k, i, j]
+                        # Interpolate img at q
+                        in_flag = _interpolate_scalar_3d[double](img, q[0],
+                            q[1], q[2], &out[k, i, j, p])
+                        if in_flag == 0:
+                            out[k, i, j, p] = 0
+                            continue
+                        tmp = out[k, i, j, p]
+                        # Compute coordinates of point dx on img's grid
+                        dx[p] = x[p] + 0.25
+                        q[0] = _apply_affine_3d_x0(dx[0], dx[1], dx[2], 1,
+                                                   out2img)
+                        q[1] = _apply_affine_3d_x1(dx[0], dx[1], dx[2], 1,
+                                                   out2img)
+                        q[2] = _apply_affine_3d_x2(dx[0], dx[1], dx[2], 1,
+                                                   out2img)
+                        q[0] += pedir[0] * field[k, i, j]
+                        q[1] += pedir[1] * field[k, i, j]
+                        q[2] += pedir[2] * field[k, i, j]
+                        # Interpolate img at q
+                        in_flag = _interpolate_scalar_3d[double](img, q[0],
+                            q[1], q[2], &out[k, i, j, p])
+                        if in_flag == 0:
+                            out[k, i, j, p] = 0
+                            continue
+                        out[k, i, j, p] = 0.5*(out[k, i, j, p] - tmp)
+                        dx[p] = x[p]
