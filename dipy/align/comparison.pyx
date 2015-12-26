@@ -9,19 +9,31 @@ cdef extern from "dpy_math.h" nogil:
     int dpy_isinf(double)
     double floor(double)
 
-cdef void _polynomial_fit(double[:] T, double[:] S, double[:] theta):
-
-def iterate_polynomial_fit(double[:,:,:] T, double[:,:,:] S, int c,
-                           double[:] theta, int initialize)
-    r"""
-    """
+def _compute_densities(int[:] x, double[:] y, int[:] mask):
     cdef:
-        cnp.npy_intp deg = len(theta)
-        cnp.npy_intp n = T.size
-    if initialize != 0:
-        # Select c random samples
-        np.random.choice(range(n))
+        int i, n, minval, maxval
+        int[:] cnt
+    n = x.shape[0]
+    minval = x[0]
+    maxval = x[0]
+    with nogil:
+        for i in range(n):
+            if x[i]<minval:
+                minval = x[i]
+            if x[i]>maxval:
+                maxval = x[i]
+    cnt = np.zeros(1+maxval, dtype=np.int32)
+    with nogil:
+        for i in range(n):
+            cnt[x[i]] += 1
+    return cnt
 
-    else:
-        # select the inliers according to theta
-
+def count_masked_values(int[:] x, int[:] mask, int[:] out):
+    cdef:
+        int i, n
+    n = x.shape[0]
+    out[:] = 0
+    with nogil:
+        for i in range(n):
+            if mask[i] != 0:
+                out[x[i]] += 1
