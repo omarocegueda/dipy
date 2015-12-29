@@ -6,6 +6,70 @@ import matplotlib.pyplot as plt
 import dipy.viz.regtools as rt
 import experiments.registration.dataset_info as info
 from dipy.align.comparison import count_masked_values
+from dipy.data import get_data
+from dipy.align import vector_fields as vfu
+import dipy.align.imwarp as imwarp
+from dipy.align.imwarp import DiffeomorphicMap
+from dipy.align import VerbosityLevels
+from numpy.testing import (assert_equal)
+from dipy.align import floating
+from dipy.align.polynomial import PolynomialTransfer
+
+
+def get_warped_stacked_image(image, nslices, b, m):
+    r""" Creates a volume by stacking copies of a deformed image
+
+    The image is deformed under an invertible field, and a 3D volume is
+    generated as follows:
+    the first and last `nslices`//3 slices are filled with zeros
+    to simulate background. The remaining middle slices are filled with
+    copies of the deformed `image` under the action of the invertible
+    field.
+
+    Parameters
+    ----------
+    image : 2d array shape(r, c)
+        the image to be deformed
+    nslices : int
+        the number of slices in the final volume
+    b, m : float
+        parameters of the harmonic field (as in [1]).
+
+    Returns
+    -------
+    vol : array shape(r, c) if `nslices`==1 else (r, c, `nslices`)
+        the volumed generated using the undeformed image
+    wvol : array shape(r, c) if `nslices`==1 else (r, c, `nslices`)
+        the volumed generated using the warped image
+
+    References
+    ----------
+    [1] Chen, M., Lu, W., Chen, Q., Ruchala, K. J., & Olivera, G. H. (2008).
+        A simple fixed-point approach to invert a deformation field.
+        Medical Physics, 35(1), 81. doi:10.1118/1.2816107
+    """
+    shape = image.shape
+    #create a synthetic invertible map and warp the circle
+    d, dinv = vfu.create_harmonic_fields_2d(shape[0], shape[1], b, m)
+    d = np.asarray(d, dtype=floating)
+    dinv = np.asarray(dinv, dtype=floating)
+    mapping = DiffeomorphicMap(2, shape)
+    mapping.forward, mapping.backward = d, dinv
+    wimage = mapping.transform(image)
+
+    if(nslices == 1):
+        return image, wimage
+
+    #normalize and form the 3d by piling slices
+    image = image.astype(floating)
+    image = (image-image.min())/(image.max() - image.min())
+    zero_slices = nslices // 3
+    vol = np.zeros(shape=image.shape + (nslices,))
+    vol[..., zero_slices:(2 * zero_slices)] = image[..., None]
+    wvol = np.zeros(shape=image.shape + (nslices,))
+    wvol[..., zero_slices:(2 * zero_slices)] = wimage[..., None]
+
+    return vol, wvol
 
 def estimate_polynomial_transfer(x, y, c=None, p=9, theta=None, tolerance=1e-9):
     n = len(x)
@@ -142,17 +206,91 @@ def test_polynomial_fit():
     rt.overlay_slices(y.reshape(t1.shape), yhat.reshape(t1.shape))
 
 
+def test_polynomial_transfer_2d():
+    r''' Test 2D SyN with PolynomialTransfer metric
+
+    Register a coronal slice from a T1w brain MRI before and after warping
+    it under a synthetic invertible map. We verify that the final
+    registration is of good quality.
+    '''
+
+    fname = get_data('t1_coronal_slice')
+    nslices = 1
+    b = 0.1
+    m = 4
+
+    image = np.load(fname)
+    moving, static = get_warped_stacked_image(image, nslices, b, m)
+
+    #Configure the metric
+    degree = 9
+    smooth = 5.0
+    q_levels = 256
+    cprop = 0.95
+    drop_zeros = False
+    metric = PolynomialTransfer(dim=2, degree=degree, smooth=smooth,
+                                q_levels=q_levels, cprop=cprop,
+                                drop_zeros=drop_zeros)
+
+    #Configure and run the Optimizer
+    level_iters = [40, 20, 10]
+    optimizer = imwarp.SymmetricDiffeomorphicRegistration(metric, level_iters)
+    optimizer.verbosity = VerbosityLevels.DEBUG
+    mapping = optimizer.optimize(static, moving, None)
+    m = optimizer.get_map()
+    assert_equal(mapping, m)
+
+    warped = mapping.transform(moving)
+    starting_energy = np.sum((static - moving)**2)
+    final_energy = np.sum((static - warped)**2)
+    reduced = 1.0 - final_energy/starting_energy
+
+    assert(reduced > 0.9)
 
 
+def test_polynomial_transfer_3d():
+    r''' Test 3D SyN with PolynomialTransfer metric
 
+    Register a volume created by stacking copies of a coronal slice from
+    a T1w brain MRI before and after warping it under a synthetic
+    invertible map. We verify that the final registration is of good
+    quality.
+    '''
+    fname = get_data('t1_coronal_slice')
+    nslices = 21
+    b = 0.1
+    m = 4
 
+    image = np.load(fname)
+    moving, static = get_warped_stacked_image(image, nslices, b, m)
 
+    #Configure the metric
+    degree = 9
+    smooth = 5.0
+    q_levels = 256
+    cprop = 0.95
+    drop_zeros = True
+    metric = PolynomialTransfer(dim=3, degree=degree, smooth=smooth,
+                                q_levels=q_levels, cprop=cprop,
+                                drop_zeros=drop_zeros)
 
+    #Create the optimizer
+    level_iters = [20, 5]
+    opt_tol = 1e-4
+    inv_iter = 20
+    inv_tol = 1e-3
+    step_length=0.25
+    ss_sigma_factor = 1.0
+    optimizer = imwarp.SymmetricDiffeomorphicRegistration(metric,
+        level_iters, step_length, ss_sigma_factor, opt_tol, inv_iter, inv_tol)
+    optimizer.verbosity = VerbosityLevels.DEBUG
+    mapping = optimizer.optimize(static, moving, None)
+    m = optimizer.get_map()
+    assert_equal(mapping, m)
 
+    warped = mapping.transform(moving)
+    starting_energy = np.sum((static - moving)**2)
+    final_energy = np.sum((static - warped)**2)
+    reduced = 1.0 - final_energy/starting_energy
 
-
-
-
-
-
-np.random.choice()
+    assert(reduced > 0.9)
