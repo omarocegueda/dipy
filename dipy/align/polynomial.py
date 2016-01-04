@@ -130,6 +130,7 @@ class PolynomialTransfer(SimilarityMetric):
 
     def polynomial_fit(self, x, y, x_eval, y_eval, theta0=None, theta1=None):
         # Allocate count vectors
+        #print("Unique values: %f %%"%(100.0*(len(np.unique(y))-1)/np.sum(y!=0)))
         n0 = np.empty(1 + np.max(x), dtype=np.int32)
         n1 = np.empty(1 + np.max(x), dtype=np.int32)
 
