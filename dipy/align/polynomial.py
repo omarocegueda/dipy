@@ -131,8 +131,9 @@ class PolynomialTransfer(SimilarityMetric):
     def polynomial_fit(self, x, y, x_eval, y_eval, theta0=None, theta1=None):
         # Allocate count vectors
         #print("Unique values: %f %%"%(100.0*(len(np.unique(y))-1)/np.sum(y!=0)))
-        n0 = np.empty(1 + np.max(x), dtype=np.int32)
-        n1 = np.empty(1 + np.max(x), dtype=np.int32)
+        nvalues = 1 + np.max([np.max(x), np.max(x_eval)])
+        n0 = np.empty(nvalues, dtype=np.int32)
+        n1 = np.empty(nvalues, dtype=np.int32)
 
         # Estimate first transfer
         theta0, sigma0, sel0 = self.estimate_polynomial_transfer(x, y, theta0)
@@ -151,8 +152,12 @@ class PolynomialTransfer(SimilarityMetric):
         count_masked_values(x, sel0.astype(np.int32), n0)
         count_masked_values(x1, sel1.astype(np.int32), n1)
         total = n0 + n1
-        pi0 = n0.astype(np.float64)/(total)
-        pi1 = n1.astype(np.float64)/(total)
+        pi0 = n0.astype(np.float64)
+        pi1 = n1.astype(np.float64)
+
+        pi0[total>0] /= total[total>0]
+        pi1[total>0] /= total[total>0]
+
         pi0[total==0] = 0.5
         pi1[total==0] = 0.5
 
