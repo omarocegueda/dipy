@@ -646,7 +646,7 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                   double[:,:,:] kernel, double[:,:,:,:] gkernel,
                                   double[:,:,:,:] gfield, double[:,:] fieldg2w,
                                   int[:] kspacing, int[:] kshape,
-                                  cnp.npy_intp radius,
+                                  cnp.npy_intp radius, double[:,:] Jpremult,
                                   Transform transform, double[:] theta,
                                   double[:,:,:] kcoef, double[:] dtheta):
     cdef:
@@ -669,9 +669,10 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
         double[:, :, :, :] factors = np.zeros((2, nr, nc, nfactors), dtype=np.float64)
         cnp.npy_intp constant_jacobian=0
         cnp.npy_intp sss, ss, rr, cc, prev_sss, prev_rr, prev_cc
-        cnp.npy_intp s, r, c, i, j, k, ii, jj, i0, i1, j0, j1, k0, k1, sc_s, sc_r, sc_c
+        cnp.npy_intp s, r, c, i, j, k, ii, jj, kk, i0, i1, j0, j1, k0, k1, sc_s, sc_r, sc_c
         double F2bar, F1bar, alpha, beta, gamma, sp_contrib, dF2, dF1, A, B, C, energy
         double factor
+        int nwindows
 
     n = transform.number_of_parameters
     J = np.zeros((3, n), dtype=np.float64)
@@ -694,6 +695,7 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
     temp = precompute_cc_factors_3d(F1, F2, radius)
     with nogil:
         energy = 0
+        nwindows = 0
         sss = 1
         for s in range(ns):
             ss = _mod(s - radius, ns)
@@ -763,6 +765,7 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
 
                         if (B*C > 1e-7):
                             energy += (A * A) / (B * C)
+                            nwindows += 1
 
                             alpha = factors[sss, rr, cc, 0]
                             beta = factors[sss, rr, cc, 1]
@@ -819,6 +822,15 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                             x[1] = rr - rot_center[1]
                                             x[2] = cc - rot_center[2]
                                             constant_jacobian = transform._jacobian(theta, x, J)
+                                            if Jpremult is not None:
+                                                for jj in range(n):
+                                                    for ii in range(3):
+                                                        #reuse x
+                                                        x[ii] = 0
+                                                        for kk in range(3):
+                                                            x[ii] += Jpremult[ii, kk] * J[kk, jj]
+                                                    for ii in range(3):
+                                                        J[ii, jj] = x[ii]
 
                                         for jj in range(n):
                                             h[jj] = 0
@@ -828,11 +840,13 @@ def cc_splines_grad_epicor_general(double[:,:,:] f1, double[:,:,:] f2,
                                             dtheta[jj] += factor * h[jj]
         for k in range(n):
             dtheta[k] = -2.0 * dtheta[k]
+            #dtheta[k] /= nwindows
 
         for k in range(kcoef.shape[0]):
             for i in range(kcoef.shape[1]):
                 for j in range(kcoef.shape[2]):
                     kcoef[k, i, j] = -2.0 * kcoef[k, i, j]
         energy = -energy
+    #print("Number of wondows: %d"%(nwindows,))
     return energy
 

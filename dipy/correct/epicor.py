@@ -153,13 +153,13 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
             radius of the local window of the CC metric. Default is 4.
         """
         self.radius = radius
-        #self.transform = RigidTransform3D()
-        self.transform = TranslationTransform3D()
+        self.transform = RigidTransform3D()
+        #self.transform = TranslationTransform3D()
         self.iter_count = 0
 
     def energy_and_gradient(self,
                             down, down_grid2world, down_pedir, down_spacings,
-                            up, up_grid2world, up_pedir, up_spacings,
+                            up, up_grid2world, up_pedir, up_spacings, prealign,
                             theta, field, field_grid2world,
                             mask_down=None, mask_up=None):
         r""" The phase encode directions must be normalized and
@@ -190,21 +190,29 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         grad_up = np.empty(shape=(up.shape)+(3,), dtype=np.float64)
         grad_down = np.empty(shape=(down.shape)+(3,), dtype=np.float64)
 
-        for i, grad in enumerate(sp.gradient(up)):
+        for i, grad in enumerate(np.gradient(up)):
             grad_up[..., i] = grad
 
-        for i, grad in enumerate(sp.gradient(down)):
+        for i, grad in enumerate(np.gradient(down)):
             grad_down[..., i] = grad
 
         # Get the warped images considering motion and off-resonance field
         if theta is not None:
             R = self.transform.param_to_matrix(theta)
+            # The center of rotation is the geometric center of the image
+            c = np.array([current_shape[0], current_shape[1], current_shape[2]]) * 0.5
+            R[:3, 3] += (c - R[:3,:3].dot(c))
         else:
             R = np.eye(4)
+
+        if prealign is not None:
+            R = prealign.dot(R)
 
         Ain = None
         Aout = npl.inv(up_grid2world).dot(field_grid2world).dot(R)
         Adisp = Aout
+
+        #print("Aout:\n", Aout)
         #Adisp = np.eye(4)
         #_dir, _sp = get_direction_and_spacings(Aout, 3)
         #Adisp[:3,:3] = _dir[:,:]
@@ -217,6 +225,9 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
         Ain = None
         Aout = npl.inv(down_grid2world).dot(field_grid2world)
         Adisp = Aout
+        Jpremult = npl.inv(down_grid2world).dot(field_grid2world)
+        if prealign is not None:
+            Jpremult = Jpremult.dot(prealign)
         #Adisp = np.eye(4)
         #_dir, _sp = get_direction_and_spacings(Aout, 3)
         #Adisp[:3,:3] = _dir[:,:]
@@ -260,7 +271,7 @@ class OppositeBlips_CC_Motion(EPIDistortionModel):
                                                 kernel, gkernel,
                                                 gb, field_grid2world,
                                                 kspacing, field_shape,
-                                                self.radius,
+                                                self.radius, Jpremult,
                                                 self.transform, theta,
                                                 kcoef_grad, dtheta)
         self.iter_count += 1
@@ -517,7 +528,7 @@ class OffResonanceFieldEstimator(object):
         self._set_multires_params(level_iters, subsampling, warp_res,
                                   fwhm, lambdas, step_lengths)
         self.energy_list = []
-        self.energy_window = 5
+        self.energy_window = 12
 
     def _approximate_derivative_direct(self, x, y):
         r"""Derivative of the degree-2 polynomial fit of the given x, y pairs
@@ -972,9 +983,12 @@ class OffResonanceFieldEstimator(object):
             # Start gradient descent
             self.energy_list = []
             tolerance = 0
-            #if self.subsampling[stage] < 2:
+            #if self.subsampling[stage] > 1:
+            if False:
                 # Do not estimate motion at full resolution
-            #    theta = None
+                theta = None
+            elif theta is None:
+                theta = self.distortion_model.transform.get_identity_parameters()
 
             best_coeff = None
             best_theta = None
@@ -983,9 +997,10 @@ class OffResonanceFieldEstimator(object):
                 print("Iter: %d / %d"%(it + 1, self.level_iters[stage]))
                 # f1 may be regarded as being moved by the rigid transform
                 # in physical space
+                #print('Prealign:\n',prealign)
                 energy, grad, dtheta = self.distortion_model.energy_and_gradient(
-                            f1_smooth, f1_affine.dot(prealign), f1_pedir, spacings,
-                            f2_smooth, f2_affine, f2_pedir, spacings, theta,
+                            f1_smooth, f1_affine, f1_pedir, spacings,
+                            f2_smooth, f2_affine, f2_pedir, spacings, prealign, theta,
                             field, affine1,
                             f1_mask, f2_mask)
                 #dtheta[1] = 0 # do not move along the pe-dir
@@ -1018,9 +1033,10 @@ class OffResonanceFieldEstimator(object):
                     has_rotation = len(dtheta)>3
                     if has_rotation:
                         max_theta = np.arcsin(0.05/(2.0 * np.max(shape1)))
-                        theta_step_length = np.array([max_theta, max_theta, max_theta, 0.01, 0.001, 0.001])
+                        theta_step_length = np.array([max_theta, max_theta, max_theta, 0.05, 0.05, 0.05])
                         dtheta[:3] /= np.abs(dtheta[:3]).max()
                         dtheta[3:] /= np.abs(dtheta[3:]).max()
+                        #dtheta /= np.abs(dtheta).max()
                     else:
                         theta_step_length = np.array([0.01, 0.0, 0.001])
                         dtheta /= np.abs(dtheta).max()

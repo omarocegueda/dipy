@@ -22,6 +22,7 @@ from dipy.correct.epicor import (OppositeBlips_CC,
                                  SingleEPI_CC,
                                  SingleEPI_ECC,
                                  OffResonanceFieldEstimator)
+from dipy.align.scalespace import IsotropicScaleSpace
 
 floating = np.float64
 data_dir = '/home/omar/data/topup_example/'
@@ -218,7 +219,7 @@ def extend(vol):
     new_vol = np.zeros(shape = new_shape, dtype=np.float64)
 
     new_vol.shape
-    new_vol[half:-half, half:-half, half:-half] = vol
+    new_vol[half:-half, half:-half, half:-half] = vol[:, :, :]
     return new_vol
 
 
@@ -270,7 +271,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
                                            warp_res=warp_res,
                                            subsampling=subsampling)
 
-    orfield_coef_fname = 'orfield_coef_trans_spsq_r4_postbest.p'
+    orfield_coef_fname = 'orfield_coef_rigid_r4_fix_center_fix_jpremult.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, R = pickle.load(open(orfield_coef_fname, 'r'))
@@ -314,6 +315,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
         Jdown = gb[...,0]*pedir_down[0] + gb[...,1]*pedir_down[1] + gb[...,2]*pedir_down[2] + 1
         Jup = gb[...,0]*pedir_up[0] + gb[...,1]*pedir_up[1] + gb[...,2]*pedir_up[2] + 1
         overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
+        overlay_slices(w_down*Jdown, w_up*Jup, slice_type=0)
 
     if False:
         d0 = estimator.f1_ss.get_image(6)
@@ -578,8 +580,8 @@ def compare_gradients():
 
 
             #dtheta[1] = 0 # do not move along the pe-dir
-            if energy is None or grad is None:
-                break
+            #if energy is None or grad is None:
+            #    break
             grad = np.array(gr.unwrap_scalar_field(grad))
 
             bending_energy, bending_grad = field.get_bending_gradient()
@@ -610,5 +612,133 @@ def compare_gradients():
             theta += theta_step
 
 
+factors = {('TRANSLATION', 2): (2.0, 0.35, np.array([2.3, 4.5])),
+           ('ROTATION', 2): (0.1, None, np.array([0.1])),
+           ('RIGID', 2): (0.1, .50, np.array([0.12, 1.8, 2.7])),
+           ('SCALING', 2): (0.01, None, np.array([1.05])),
+           ('AFFINE', 2): (0.1, .50, np.array([0.99, -0.05, 1.3, 0.05, 0.99, 2.5])),
+           ('TRANSLATION', 3): (2.0, None, np.array([2.3, 4.5, 1.7])),
+           ('ROTATION', 3): (0.1, 1.0, np.array([0.1, 0.15, -0.11])),
+           ('RIGID', 3): (0.1, None, np.array([0.1, 0.15, -0.11, 2.3, 4.5, 1.7])),
+           ('SCALING', 3): (0.1, .35, np.array([0.95])),
+           ('AFFINE', 3): (0.1, None, np.array([0.99, -0.05,  0.03, 1.3,
+                                                0.05,  0.99, -0.10, 2.5,
+                                                -0.07, 0.10,  0.99, -1.4]))}
 
-test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION()
+
+def test_ecc_gradient():
+    np.random.seed(2022966)
+    # Test the gradient of mutual information
+    h = 0.001
+    #for ttype in sorted(factors):
+    if True:
+        ttype = ('RIGID', 3)
+        transform = regtransforms[ttype]
+        #dim = ttype[1]
+        #factor = factors[ttype][0]
+        #sampling_proportion = factors[ttype][1]
+        #theta = factors[ttype][2]
+
+        # Start from a small rotation
+        #start = regtransforms[('ROTATION', dim)]
+        #nrot = start.get_number_of_parameters()
+        #starting_affine = start.param_to_matrix(0.25 * np.random.randn(nrot))
+
+        # Get data (pair of images related to each other by an known transform)
+        up_nib = nib.load(up_fname)
+        up_affine = up_nib.get_affine()
+        up = up_nib.get_data().squeeze().astype(np.float64)
+        up = extend(up)
+        up /= up.mean()
+
+        down_nib = nib.load(down_fname)
+        down_affine = down_nib.get_affine()
+        down = down_nib.get_data().squeeze().astype(np.float64)
+        down = extend(down)
+        down /= down.mean()
+
+        dir_up, spacings_up = imwarp.get_direction_and_spacings(up_affine, 3)
+        dir_down, spacings_down = imwarp.get_direction_and_spacings(down_affine, 3)
+
+        radius = 4
+
+        spacings = spacings_down.copy()
+
+        fwhm = np.array([8, 6, 4, 3, 3, 2, 1, 0, 0])
+        subsampling = np.array([2, 2, 2, 2, 2, 1, 1, 1, 1])
+        warp_res = np.array([20, 16, 14, 12, 10, 6, 4, 4, 4], dtype=np.float64)
+        fwhm2sigma = (np.sqrt(8.0 * np.log(2)))
+        sigmas = (fwhm / fwhm2sigma)
+        sigmas /= np.max(spacings)
+        sigmas = np.sqrt(sigmas)
+        f1_ss = IsotropicScaleSpace(down,
+                                    subsampling,
+                                    sigmas,
+                                    down_affine,
+                                    spacings,
+                                    False)
+        f2_ss = IsotropicScaleSpace(up,
+                                    subsampling,
+                                    sigmas,
+                                    up_affine,
+                                    spacings,
+                                    False)
+
+        nstages = len(subsampling)
+        stage = 0
+        scale = nstages - 1 - stage
+        f1_smooth = f1_ss.get_image(scale)
+        f2_smooth = f2_ss.get_image(scale)
+        f1_pedir = np.array((0,-1,0), dtype=np.float64)
+        f2_pedir = np.array((0,1,0), dtype=np.float64)
+        f1_affine = down_affine
+        f2_affine = up_affine
+        f1_mask = None
+        f2_mask = None
+        resampled_sp = subsampling[stage] * spacings
+        kspacing = np.round(warp_res[stage]/resampled_sp)
+        kspacing = kspacing.astype(np.int32)
+        kspacing[kspacing < 1] = 1
+        shape1 = f1_ss.get_domain_shape(scale)
+
+
+
+        # Prepare a MutualInformationMetric instance
+        radius = 4
+        distortion_model = OppositeBlips_CC_Motion(radius=radius)
+
+        field = CubicSplineField(shape1, kspacing)
+        b_coeff = np.zeros(field.num_coefficients())
+        field.copy_coefficients(b_coeff)
+        theta = distortion_model.transform.get_identity_parameters()
+        prealign = np.eye(4)
+        # Compute the gradient with the implementation under test
+        energy, grad, actual = distortion_model.energy_and_gradient(
+                            f1_smooth, f1_affine, f1_pedir, spacings,
+                            f2_smooth, f2_affine, f2_pedir, spacings, prealign, theta,
+                            field, f1_affine,
+                            f1_mask, f2_mask)
+
+        # Compute the gradient using finite-diferences
+        n = distortion_model.transform.get_number_of_parameters()
+        expected = np.empty(n, dtype=np.float64)
+
+        val0 = energy
+        for i in range(n):
+            print('Computing component %d.'%(i,))
+            dtheta = theta.copy()
+            dtheta[i] += h
+            # Compute the energy
+            energy, _x, _y = distortion_model.energy_and_gradient(
+                            f1_smooth, f1_affine, f1_pedir, spacings,
+                            f2_smooth, f2_affine, f2_pedir, spacings, prealign, dtheta,
+                            field, f1_affine,
+                            f1_mask, f2_mask)
+            val1 = energy
+            expected[i] = (val1 - val0) / h
+
+        dp = expected.dot(actual)
+        enorm = npl.norm(expected)
+        anorm = npl.norm(actual)
+        nprod = dp / (enorm * anorm)
+        assert(nprod >= 0.99)
