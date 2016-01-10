@@ -178,6 +178,7 @@ class PolynomialTransfer(SimilarityMetric):
 
         #Final weights
         den = pi0[x_eval] * G0 + pi1[x_eval] * G1
+        den[den==0] = 1
         P0 = (pi0[x_eval] * G0) / den
         P1 = (pi1[x_eval] * G1) / den
 
