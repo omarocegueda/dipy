@@ -1553,7 +1553,7 @@ def simplify_warp_function_3d(floating[:, :, :, :] d,
                             k, i, j, 1, affine_idx_in)
                         dj = _apply_affine_3d_x2(
                             k, i, j, 1, affine_idx_in)
-                        inside = _interpolate_vector_3d[floating](d, dk, di, 
+                        inside = _interpolate_vector_3d[floating](d, dk, di,
                                                                   dj, tmp)
                         dkk = tmp[0]
                         dii = tmp[1]
@@ -3370,7 +3370,7 @@ def _sparse_gradient_2d(floating[:, :] img, double[:, :] img_world2grid,
                 dx[p] = sample_points[i, p]
 
 
-def gradient(img, img_world2grid, img_spacing, out_shape, 
+def gradient(img, img_world2grid, img_spacing, out_shape,
              out_grid2world):
     r""" Gradient of an image in physical space
 
@@ -3456,3 +3456,239 @@ def sparse_gradient(img, img_world2grid, img_spacing, sample_points):
     jd_grad(img, img_world2grid.astype(np.float64),
             img_spacing.astype(np.float64), sample_points, out, inside)
     return out, inside
+
+
+cdef _warp_with_composition_trilinear(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
+                                      double[:,:] A, double[:,:] B, double[:,:] C,
+                                      double[:,:] D, double[:,:] E, floating[:,:,:] volume,
+                                      floating[:,:,:] out):
+    r"""
+           Align only (physical space)
+                       v
+                       v               Grid space
+                       v          ---------------------
+    C(x) = volume[E * (D*P + phi1[C * (B*x + phi2[A*x]) ]) ]
+                                  ^    ---------------
+                                  ^   P: physical space
+                                  ^
+                   Align and project to phi1's grid
+                   Q = D*P + phi1[C * P]
+    """
+    ftype = np.asarray(volume).dtype
+    cdef:
+        int nslices = out.shape[0]
+        int nrows = out.shape[1]
+        int ncols = out.shape[2]
+        int k, i, j, inside
+        double x, y, z
+        floating[:] P = np.ndarray(3, dtype=ftype)
+        floating[:] Q = np.ndarray(3, dtype=ftype)
+    with nogil:
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    if A is not None:
+                        x = _apply_affine_3d_x0(k, i, j, 1.0, A)
+                        y = _apply_affine_3d_x1(k, i, j, 1.0, A)
+                        z = _apply_affine_3d_x2(k, i, j, 1.0, A)
+                    else:
+                        x = k
+                        y = i
+                        z = j
+                    if phi2 is not None:
+                        inside = _interpolate_vector_3d[floating](phi2, x, y, z, P)
+                        if inside == 0:
+                            out[k, i, j] = 0
+                            continue
+                    else: # The nonlinear mapping is considered to be the identity
+                        P[:3] = 0
+                    if B is not None:
+                        P[0] += _apply_affine_3d_x0(k, i, j, 1.0, B)
+                        P[1] += _apply_affine_3d_x1(k, i, j, 1.0, B)
+                        P[2] += _apply_affine_3d_x2(k, i, j, 1.0, B)
+                    else:
+                        P[0] += k
+                        P[1] += i
+                        P[2] += j
+                    # Now P is as in the diagram above
+                    if C is not None:
+                        x = _apply_affine_3d_x0(P[0], P[1], P[2], 1.0, C)
+                        y = _apply_affine_3d_x1(P[0], P[1], P[2], 1.0, C)
+                        z = _apply_affine_3d_x2(P[0], P[1], P[2], 1.0, C)
+                    else:
+                        x = P[0]
+                        y = P[1]
+                        z = P[2]
+                    if phi1 is not None:
+                        inside = _interpolate_vector_3d[floating](phi1, x, y, z, Q)
+                        if inside == 0:
+                            out[k, i, j] = 0
+                            continue
+                    else:
+                        Q[:] = 0
+                    if D is not None:
+                        Q[0] += _apply_affine_3d_x0(P[0], P[1], P[2], 1.0, D)
+                        Q[1] += _apply_affine_3d_x1(P[0], P[1], P[2], 1.0, D)
+                        Q[2] += _apply_affine_3d_x2(P[0], P[1], P[2], 1.0, D)
+                    else:
+                        Q[0] += P[0]
+                        Q[1] += P[1]
+                        Q[2] += P[2]
+                    # Now Q is as in the diagram above
+                    if E is not None:
+                        x = _apply_affine_3d_x0(Q[0], Q[1], Q[2], 1.0, E)
+                        y = _apply_affine_3d_x1(Q[0], Q[1], Q[2], 1.0, E)
+                        z = _apply_affine_3d_x2(Q[0], Q[1], Q[2], 1.0, E)
+                    else:
+                        x = Q[0]
+                        y = Q[1]
+                        z = Q[2]
+                    inside = _interpolate_scalar_3d[floating](volume, x, y, z, &out[k,i,j])
+
+
+cdef _warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
+                               double[:,:] A, double[:,:] B, double[:,:] C,
+                               double[:,:] D, double[:,:] E, number[:,:,:] volume,
+                               number[:,:,:] out):
+    r"""
+           Align only (physical space)
+                       v
+                       v               Grid space
+                       v          ---------------------
+    C(x) = volume[E * (D*P + phi1[C * (B*x + phi2[A*x]) ]) ]
+                                  ^    ---------------
+                                  ^   P: physical space
+                                  ^
+                   Align and project to phi1's grid
+                   Q = D*P + phi1[C * P]
+    """
+    ftype = np.asarray(phi1).dtype
+    cdef:
+        int nslices = out.shape[0]
+        int nrows = out.shape[1]
+        int ncols = out.shape[2]
+        int k, i, j, inside
+        double x, y, z
+        floating[:] P = np.ndarray(3, dtype=ftype)
+        floating[:] Q = np.ndarray(3, dtype=ftype)
+    with nogil:
+        for k in range(nslices):
+            for i in range(nrows):
+                for j in range(ncols):
+                    if A is not None:
+                        x = _apply_affine_3d_x0(k, i, j, 1.0, A)
+                        y = _apply_affine_3d_x1(k, i, j, 1.0, A)
+                        z = _apply_affine_3d_x2(k, i, j, 1.0, A)
+                    else:
+                        x = k
+                        y = i
+                        z = j
+                    if phi2 is not None:
+                        inside = _interpolate_vector_3d[floating](phi2, x, y, z, P)
+                        if inside == 0:
+                            out[k, i, j] = 0
+                            continue
+                    else: # The nonlinear mapping is considered to be the identity
+                        P[:3] = 0
+                    if B is not None:
+                        P[0] += _apply_affine_3d_x0(k, i, j, 1.0, B)
+                        P[1] += _apply_affine_3d_x1(k, i, j, 1.0, B)
+                        P[2] += _apply_affine_3d_x2(k, i, j, 1.0, B)
+                    else:
+                        P[0] += k
+                        P[1] += i
+                        P[2] += j
+                    # Now P is as in the diagram above
+                    if C is not None:
+                        x = _apply_affine_3d_x0(P[0], P[1], P[2], 1.0, C)
+                        y = _apply_affine_3d_x1(P[0], P[1], P[2], 1.0, C)
+                        z = _apply_affine_3d_x2(P[0], P[1], P[2], 1.0, C)
+                    else:
+                        x = P[0]
+                        y = P[1]
+                        z = P[2]
+                    if phi1 is not None:
+                        inside = _interpolate_vector_3d[floating](phi1, x, y, z, Q)
+                        if inside == 0:
+                            out[k, i, j] = 0
+                            continue
+                    else:
+                        Q[:] = 0
+                    if D is not None:
+                        Q[0] += _apply_affine_3d_x0(P[0], P[1], P[2], 1.0, D)
+                        Q[1] += _apply_affine_3d_x1(P[0], P[1], P[2], 1.0, D)
+                        Q[2] += _apply_affine_3d_x2(P[0], P[1], P[2], 1.0, D)
+                    else:
+                        Q[0] += P[0]
+                        Q[1] += P[1]
+                        Q[2] += P[2]
+                    # Now Q is as in the diagram above
+                    if E is not None:
+                        x = _apply_affine_3d_x0(Q[0], Q[1], Q[2], 1.0, E)
+                        y = _apply_affine_3d_x1(Q[0], Q[1], Q[2], 1.0, E)
+                        z = _apply_affine_3d_x2(Q[0], Q[1], Q[2], 1.0, E)
+                    else:
+                        x = Q[0]
+                        y = Q[1]
+                        z = Q[2]
+                    inside = _interpolate_scalar_nn_3d[number](volume, x, y, z, &out[k,i,j])
+
+def warp_with_composition_trilinear(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
+                                    double[:,:] A, double[:,:] B, double[:,:] C,
+                                    double[:,:] D, double[:,:] E, floating[:,:,:] volume,
+                                    int[:] sampling_shape):
+    ftype = np.asarray(volume).dtype
+    cdef:
+        int ns, nr, nc
+    if sampling_shape is not None:
+        ns = sampling_shape[0]
+        nr = sampling_shape[1]
+        nc = sampling_shape[2]
+    elif phi2 is not None:
+        ns = phi2.shape[0]
+        nr = phi2.shape[1]
+        nc = phi2.shape[2]
+    elif phi1 is not None:
+        ns = phi1.shape[0]
+        nr = phi1.shape[1]
+        nc = phi1.shape[2]
+    elif volume is not None:
+        ns = volume.shape[0]
+        nr = volume.shape[1]
+        nc = volume.shape[2]
+    else:
+        raise ValueError("Insufficient sampling information")
+    cdef:
+        floating[:,:,:] out=np.zeros(shape=(ns,nr,nc), dtype=ftype)
+    _warp_with_composition_trilinear(phi1, phi2, A, B, C, D, E, volume, out)
+    return out
+
+def warp_with_composition_nn(floating[:,:,:,:] phi1, floating[:,:,:,:] phi2,
+                             double[:,:] A, double[:,:] B, double[:,:] C,
+                             double[:,:] D, double[:,:] E, number[:,:,:] volume,
+                             int[:] sampling_shape):
+    ftype = np.asarray(volume).dtype
+    cdef:
+        int ns, nr, nc
+    if sampling_shape is not None:
+        ns = sampling_shape[0]
+        nr = sampling_shape[1]
+        nc = sampling_shape[2]
+    elif phi2 is not None:
+        ns = phi2.shape[0]
+        nr = phi2.shape[1]
+        nc = phi2.shape[2]
+    elif phi1 is not None:
+        ns = phi1.shape[0]
+        nr = phi1.shape[1]
+        nc = phi1.shape[2]
+    elif volume is not None:
+        ns = volume.shape[0]
+        nr = volume.shape[1]
+        nc = volume.shape[2]
+    else:
+        raise ValueError("Insufficient sampling information")
+    cdef:
+        number[:,:,:] out=np.zeros(shape=(ns,nr,nc), dtype=ftype)
+    _warp_with_composition_nn[floating,number](phi1, phi2, A, B, C, D, E, volume, out)
+    return out
