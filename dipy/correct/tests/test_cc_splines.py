@@ -230,13 +230,13 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
     up_nib = nib.load(up_fname)
     up_affine = up_nib.get_affine()
     up = up_nib.get_data().squeeze().astype(np.float64)
-    up = extend(up)
+    #up = extend(up)
     up /= up.mean()
 
     down_nib = nib.load(down_fname)
     down_affine = down_nib.get_affine()
     down = down_nib.get_data().squeeze().astype(np.float64)
-    down = extend(down)
+    #down = extend(down)
     down /= down.mean()
 
     pedir_up = np.array((0,1,0), dtype=np.float64)
@@ -271,7 +271,7 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
                                            warp_res=warp_res,
                                            subsampling=subsampling)
 
-    orfield_coef_fname = 'orfield_coef_rigid_r4_fix_center_fix_jpremult.p'
+    orfield_coef_fname = 'orfield_coef_rigid_r4_fix_center_fix_jpremult_noextend.p'
     orfield = None
     if os.path.isfile(orfield_coef_fname):
         coef, R = pickle.load(open(orfield_coef_fname, 'r'))
@@ -304,8 +304,10 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
                                           Aout, Adisp, shape)
 
     if True:
-        rt.plot_slices(b)
-        overlay_slices(w_down, w_up, slice_type=2)
+        fig = rt.plot_slices(b)
+        fig.patch.set_facecolor('white')
+        fig = overlay_slices(w_up, w_down, slice_type=2)
+        fig.patch.set_facecolor('white')
         gb = np.zeros(shape=b.shape + (3,), dtype=np.float64)
         gb[...,0] = orfield.get_volume((1,0,0))
         gb[...,1] = orfield.get_volume((0,1,0))
@@ -314,7 +316,8 @@ def test_epicor_OPPOSITE_BLIPS_CC_SS_MOTION():
 
         Jdown = gb[...,0]*pedir_down[0] + gb[...,1]*pedir_down[1] + gb[...,2]*pedir_down[2] + 1
         Jup = gb[...,0]*pedir_up[0] + gb[...,1]*pedir_up[1] + gb[...,2]*pedir_up[2] + 1
-        overlay_slices(w_down*Jdown, w_up*Jup, slice_type=2)
+        fig = overlay_slices(w_up*Jup, w_down*Jdown, slice_type=2)
+        fig.patch.set_facecolor('white')
         overlay_slices(w_down*Jdown, w_up*Jup, slice_type=0)
 
     if False:
